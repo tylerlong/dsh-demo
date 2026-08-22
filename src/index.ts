@@ -2,10 +2,15 @@
  * @dsh-demo/driver — DeepSeek Harness as a script.
  *
  * One-shot plugin on the `dsh-demo` profile (dsh-base only): the PRIMARY agent
- * (~deepseek/deepseek-v4-flash-latest) starts a workflow whose script spawns
- * agent A (openai/gpt-5.6-luna) to generate a random integer, branches on
- * parity, then spawns agent B (deepseek, n*9 -> b.txt) or agent C (gpt-5.6-luna,
+ * (~deepseek/deepseek-v4-flash-latest) spawns agent A (openai/gpt-5.6-luna) to
+ * generate a random integer, the driver branches on parity in plain TypeScript,
+ * then spawns agent B (deepseek, n*9 -> b.txt) or agent C (gpt-5.6-luna,
  * n*10 -> c.txt). The primary reports the result; the driver exits 0/1.
+ *
+ * Orchestration is DIRECT: every child is a `subagents.start('spawn', ...)`
+ * call from this file — no workflow script string, no vm sandbox. The driver
+ * is the orchestrator; the subagent service supplies per-child provider/model
+ * override and schema'd structured output.
  */
 
 import { randomUUID } from "node:crypto";
@@ -17,7 +22,11 @@ import type {} from "@deepseek-ai/dsh-cmdline";
 import { APP_IDENTITY, createUserMessage } from "@deepseek-ai/dsh-llm";
 import type { SessionEvent, SessionStore } from "@deepseek-ai/dsh-session";
 import { SessionId } from "@deepseek-ai/dsh-session";
-import type { WorkflowEngine, WorkflowRun } from "@deepseek-ai/dsh-workflow";
+import type {
+	SubagentResult,
+	SubagentRun,
+	SubagentRuntime,
+} from "@deepseek-ai/dsh-subagent";
 
 // White-label the User-Agent every provider request sends: this process's
 // `@deepseek-ai/dsh-llm` is the same module instance the pi-ai adapter reads
@@ -31,13 +40,13 @@ APP_IDENTITY.url = "https://opencode.ai";
 export const name = "dsh-demo-driver";
 
 /** Core services required before the one-shot run can start. */
-export const inject = ["agents", "sessions"];
+export const inject = ["agents", "sessions", "subagents"];
 
 /** Plugin config; no schema declared, so Cordis passes it through unvalidated. */
 export interface Config {
 	/** Directory b.txt/c.txt are written into (default: process.cwd()). */
 	outputDir?: string;
-	/** Abort the workflow after this many milliseconds (no timeout by default). */
+	/** Abort the run after this many milliseconds (no timeout by default). */
 	timeoutMs?: number;
 }
 
@@ -47,8 +56,11 @@ const MODEL_A = "openai/gpt-5.6-luna";
 const MODEL_B = "~deepseek/deepseek-v4-flash-latest";
 const MODEL_C = "openai/gpt-5.6-luna";
 
-/** What the workflow script returns to the driver. */
-interface WorkflowValue {
+/** The subagent provider every child runs on (registered by dsh-base). */
+const SUBAGENT_PROVIDER = "spawn";
+
+/** What the run produced, for the primary's final summary turn. */
+interface RunSummary {
 	number: number;
 	odd: boolean;
 	branch: string;
@@ -56,45 +68,39 @@ interface WorkflowValue {
 	value: number;
 }
 
-const META = {
-	name: "random-number-demo",
-	description: "primary -> A(random) -> B/C(compute+write)",
-};
+/** A structured-result schema for a single integer field. */
+function intSchema(key: string): {
+	type: "object";
+	properties: Record<string, { type: "integer" }>;
+	required: string[];
+	additionalProperties: boolean;
+} {
+	return {
+		type: "object",
+		properties: { [key]: { type: "integer" } },
+		required: [key],
+		additionalProperties: false,
+	};
+}
 
-/**
- * The workflow script body (plain JS, top-level await allowed). It runs in a
- * worker-thread vm; `agent()` spawns a subagent of the run's parent (the
- * primary agent) with per-call provider/model, and `args` carries the cwd.
- */
-const SCRIPT = `
-// A structured-result schema for a single integer field.
-const intSchema = (key) => ({ type: 'object', properties: { [key]: { type: 'integer' } }, required: [key], additionalProperties: false })
+/** Agent A's prompt: generate a random integer via bash, report via structured_output. */
+const PROMPT_A =
+	'Generate a truly random integer between 1 and 100 by running the bash tool with this exact command: node -e "console.log(Math.floor(Math.random()*100)+1)". Read the printed number from the tool result, then report it by calling the structured_output tool with {"number": <the integer>}. Do not finish with plain text — only the structured_output tool call counts.';
 
-// --- agent A: generate the random number (openai/gpt-5.6-luna) ---
-const a = await agent(
-  'Generate a truly random integer between 1 and 100 by running the bash tool with this exact command: node -e "console.log(Math.floor(Math.random()*100)+1)". Read the printed number from the tool result, then report it by calling the structured_output tool with {"number": <the integer>}. Do not finish with plain text — only the structured_output tool call counts.',
-  { label: 'A', provider: '${PROVIDER}', model: '${MODEL_A}', schema: intSchema('number') },
-)
-if (a === null) throw new Error('agent A failed to produce a random number')
-const number = a.number
-
-// --- deterministic branch on parity ---
-const odd = number % 2 !== 0
-const branch = odd ? 'B' : 'C'
-const factor = odd ? 9 : 10
-const file = odd ? 'b.txt' : 'c.txt'
-const model = odd ? '${MODEL_B}' : '${MODEL_C}'
-log('random number = ' + number + ' (' + (odd ? 'odd' : 'even') + ') -> agent ' + branch)
-
-// --- agent B/C: compute and write the file ---
-const r = await agent(
-  'The random number is ' + number + '. Compute ' + number + ' * ' + factor + ' = ? and write the result to ' + file + ' at the absolute path ' + args.cwd + '/' + file + ' using the write tool. Then report your computed value by calling the structured_output tool with {"value": <the integer>}. Do not finish with plain text — only the structured_output tool call counts.',
-  { label: branch, provider: '${PROVIDER}', model, schema: intSchema('value') },
-)
-if (r === null) throw new Error('agent ' + branch + ' failed')
-
-return { number, odd, branch, file, value: r.value }
-`;
+/** Agent B/C's prompt: compute the product and write it to the file. */
+function promptBc(
+	number: number,
+	factor: number,
+	file: string,
+	cwd: string,
+): string {
+	return (
+		`The random number is ${number}. Compute ${number} * ${factor} = ? and write the result to ` +
+		`${file} at the absolute path ${cwd}/${file} using the write tool. Then report your computed ` +
+		'value by calling the structured_output tool with {"value": <the integer>}. Do not finish ' +
+		"with plain text — only the structured_output tool call counts."
+	);
+}
 
 /** Render any thrown value as a message string. */
 function messageOf(error: unknown): string {
@@ -126,14 +132,14 @@ function lastAssistantText(events: readonly SessionEvent[]): string {
 async function summarize(
 	agent: Agent,
 	sessions: SessionStore,
-	value: WorkflowValue,
+	summary: RunSummary,
 ): Promise<void> {
 	agent.followup(
 		createUserMessage({
 			content: [
 				{
 					type: "text",
-					text: `The workflow finished. Random number: ${value.number} (${value.odd ? "odd" : "even"}). Agent ${value.branch} computed ${value.value} and wrote it to ${value.file}. Confirm the file was written and summarize the run in one short message.`,
+					text: `The run finished. Random number: ${summary.number} (${summary.odd ? "odd" : "even"}). Agent ${summary.branch} computed ${summary.value} and wrote it to ${summary.file}. Confirm the file was written and summarize the run in one short message.`,
 				},
 			],
 			source: { kind: "user" },
@@ -141,94 +147,78 @@ async function summarize(
 	);
 	await agent.whenIdle();
 	await sessions.flush(agent.session);
-	const summary = lastAssistantText(agent.session.events);
-	if (summary !== "") console.log(`[dsh-demo] primary agent: ${summary}`);
+	const text = lastAssistantText(agent.session.events);
+	if (text !== "") console.log(`[dsh-demo] primary agent: ${text}`);
 }
 
 /**
- * Print realtime workflow progress: agent lifecycle, script log lines, and the
- * token-level stream of every child (session/event is the live firehose).
- * Every agent-bound line is prefixed with the agent's name. Returns a disposer.
+ * Print one child's live token stream and tool calls (session/event is the
+ * live firehose, filtered to the child's session). Returns a disposer.
  */
-function watchWorkflow(ctx: Context, run: WorkflowRun): () => void {
-	// Child session id -> agent label, filled by agent-start events.
-	const labels = new Map<SessionId, string>();
-	// Child session ids currently streaming tokens (label prefix already printed).
-	const streaming = new Set<SessionId>();
-
-	const disposers = [
-		ctx.on("workflow/agent-start", (info, agent) => {
-			if (info.id !== run.id) return;
-			labels.set(agent.childId, agent.label);
-			console.log(`[${agent.label}] started`);
-		}),
-		ctx.on("workflow/agent-end", (info, agent) => {
-			if (info.id !== run.id) return;
-			console.log(`[${agent.label}] ${agent.outcome}`);
-		}),
-		ctx.on("workflow/log", (info, message) => {
-			if (info.id !== run.id) return;
-			console.log(`[wf] script: ${message}`);
-		}),
-		ctx.on("session/event", (session, event) => {
-			const label = labels.get(session.id);
-			if (label === undefined) return;
-			if (
-				event.type === "assistant/chunk" &&
-				event.data.chunk.type === "text-delta"
-			) {
-				// Prefix once per stream, then keep appending tokens to the same line.
-				if (!streaming.has(session.id)) {
-					process.stdout.write(`\n[${label}] `);
-					streaming.add(session.id);
-				}
-				process.stdout.write(event.data.chunk.text);
-			} else if (event.type === "tool/call") {
-				process.stdout.write(`\n[${label}] → tool ${event.data.name}\n`);
-			} else if (event.type === "turn/end") {
-				process.stdout.write("\n");
-				streaming.delete(session.id);
+function watchChild(
+	ctx: Context,
+	sessionId: SessionId,
+	label: string,
+): () => void {
+	let streaming = false;
+	return ctx.on("session/event", (session, event) => {
+		if (session.id !== sessionId) return;
+		if (
+			event.type === "assistant/chunk" &&
+			event.data.chunk.type === "text-delta"
+		) {
+			// Prefix once per stream, then keep appending tokens to the same line.
+			if (!streaming) {
+				process.stdout.write(`\n[${label}] `);
+				streaming = true;
 			}
-		}),
-	];
-	return () => {
-		for (const dispose of disposers) dispose();
-	};
+			process.stdout.write(event.data.chunk.text);
+		} else if (event.type === "tool/call") {
+			process.stdout.write(`\n[${label}] → tool ${event.data.name}\n`);
+		} else if (event.type === "turn/end") {
+			process.stdout.write("\n");
+			streaming = false;
+		}
+	});
 }
 
-/** Run the workflow script and return its value, disposing the worker thread. */
-async function runWorkflow(
+/**
+ * Start one child on the named provider/model and await its structured result.
+ * The child must call `structured_output` explicitly (that is the only way the
+ * schema'd value is captured); a plain-text finish yields no structured value.
+ */
+async function runChild(
 	ctx: Context,
-	engine: WorkflowEngine,
+	subagents: SubagentRuntime,
 	parent: Agent,
-	cwd: string,
-	timeoutMs: number | undefined,
-): Promise<WorkflowValue> {
-	// An aborted signal cancels the run and its children — no blind wait.
-	const signal =
-		timeoutMs === undefined ? undefined : AbortSignal.timeout(timeoutMs);
-	const run = engine.start({
-		script: SCRIPT,
-		meta: META,
-		args: { cwd },
+	label: string,
+	prompt: string,
+	model: string,
+	schema: ReturnType<typeof intSchema>,
+	signal: AbortSignal,
+): Promise<SubagentResult> {
+	console.log(`[${label}] started`);
+	const run: SubagentRun = await subagents.start(SUBAGENT_PROVIDER, {
+		label,
+		prompt: [{ type: "text", text: prompt }],
 		parent,
 		signal,
+		agentOptions: { provider: PROVIDER, model },
+		outputSchema: schema,
 	});
-	const stopWatching = watchWorkflow(ctx, run);
+	const stopWatching = watchChild(ctx, run.id, label);
 	try {
 		const result = await run.result;
-		if (result.stopReason === "cancelled") {
+		if (result.stopReason !== "completed" || result.structured === undefined) {
 			throw new Error(
-				`workflow cancelled (timeout ${timeoutMs}ms): ${result.error ?? ""}`,
+				`agent ${label} ${result.stopReason}${result.diagnostic === undefined ? "" : `: ${result.diagnostic}`}`,
 			);
 		}
-		if (result.stopReason !== "completed") {
-			throw new Error(`workflow ${result.stopReason}: ${result.error ?? ""}`);
-		}
-		return result.value as WorkflowValue;
+		console.log(`[${label}] completed`);
+		return result;
 	} finally {
 		stopWatching();
-		await run.dispose(); // terminate the worker thread so the process can exit
+		await run.dispose(); // reach child quiescence so the process can exit
 	}
 }
 
@@ -237,17 +227,26 @@ async function run(ctx: Context, config: Config): Promise<number> {
 	await ctx.get("loader")?.await();
 	const agents = ctx.get("agents");
 	const sessions = ctx.get("sessions");
-	const engine = ctx.get("workflowEngine");
-	if (agents === undefined || sessions === undefined || engine === undefined) {
+	const subagents = ctx.get("subagents");
+	if (
+		agents === undefined ||
+		sessions === undefined ||
+		subagents === undefined
+	) {
 		console.error(
-			"dsh-demo-driver: missing services (agents/sessions/workflowEngine)",
+			"dsh-demo-driver: missing services (agents/sessions/subagents)",
 		);
 		return 1;
 	}
 
 	const cwd = config.outputDir ?? process.cwd();
+	// One run-wide timeout signal; when it fires, the active child is cancelled.
+	const signal =
+		config.timeoutMs === undefined
+			? new AbortController().signal
+			: AbortSignal.timeout(config.timeoutMs);
 
-	// PRIMARY agent (~deepseek/deepseek-v4-flash-latest); every workflow child is its subagent.
+	// PRIMARY agent (~deepseek/deepseek-v4-flash-latest); every child is its subagent.
 	const { agent, dispose } = await agents.create({
 		sessionId: SessionId(`session-${randomUUID()}`),
 		meta: { cwd },
@@ -256,15 +255,47 @@ async function run(ctx: Context, config: Config): Promise<number> {
 	try {
 		await agent.whenIdle();
 
-		const value = await runWorkflow(ctx, engine, agent, cwd, config.timeoutMs);
-		console.log(
-			`[dsh-demo] random number = ${value.number} (${value.odd ? "odd" : "even"})`,
+		// --- agent A: generate the random number (openai/gpt-5.6-luna) ---
+		const a = await runChild(
+			ctx,
+			subagents,
+			agent,
+			"A",
+			PROMPT_A,
+			MODEL_A,
+			intSchema("number"),
+			signal,
 		);
+		const number = (a.structured as { number: number }).number;
+
+		// --- deterministic branch on parity (plain TS, no model involvement) ---
+		const odd = number % 2 !== 0;
+		const branch = odd ? "B" : "C";
+		const factor = odd ? 9 : 10;
+		const file = odd ? "b.txt" : "c.txt";
+		const model = odd ? MODEL_B : MODEL_C;
 		console.log(
-			`[dsh-demo] agent ${value.branch} computed ${value.number} * ${value.odd ? 9 : 10} = ${value.value} -> ${value.file}`,
+			`[dsh-demo] random number = ${number} (${odd ? "odd" : "even"}) -> agent ${branch}`,
+		);
+
+		// --- agent B/C: compute and write the file ---
+		const r = await runChild(
+			ctx,
+			subagents,
+			agent,
+			branch,
+			promptBc(number, factor, file, cwd),
+			model,
+			intSchema("value"),
+			signal,
+		);
+		const value = (r.structured as { value: number }).value;
+
+		console.log(
+			`[dsh-demo] agent ${branch} computed ${number} * ${factor} = ${value} -> ${file}`,
 		);
 		try {
-			await summarize(agent, sessions, value);
+			await summarize(agent, sessions, { number, odd, branch, file, value });
 		} catch (error) {
 			console.warn(
 				`dsh-demo-driver: primary summary turn failed: ${messageOf(error)}`,

@@ -23,7 +23,7 @@
 		"@deepseek-ai/dsh-cmdline": "link:/Users/tyler.liu/src/ai/deepseek-harness/packages/boot/cmdline",
 		"@deepseek-ai/dsh-llm": "link:/Users/tyler.liu/src/ai/deepseek-harness/packages/llm/llm",
 		"@deepseek-ai/dsh-session": "link:/Users/tyler.liu/src/ai/deepseek-harness/packages/core/session",
-		"@deepseek-ai/dsh-workflow": "link:/Users/tyler.liu/src/ai/deepseek-harness/packages/workflow/workflow"
+		"@deepseek-ai/dsh-subagent": "link:/Users/tyler.liu/src/ai/deepseek-harness/packages/subagent/subagent"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.5.8",

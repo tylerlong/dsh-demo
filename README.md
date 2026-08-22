@@ -12,7 +12,7 @@ primary agent  (~deepseek/deepseek-v4-flash-latest, openrouter)
    │     → generates a random integer 1–100 (via a real random source)
    │     → returns it to the primary
    │
-   ├─ deterministic branch on parity (script logic, not an LLM decision)
+   ├─ deterministic branch on parity (driver logic, not an LLM decision)
    │
    ├─ odd  → starts agent B (~deepseek/deepseek-v4-flash-latest)
    │          computes n × 9  → writes b.txt in the project folder
@@ -21,15 +21,15 @@ primary agent  (~deepseek/deepseek-v4-flash-latest, openrouter)
               computes n × 10 → writes c.txt in the project folder
 ```
 
-The primary agent then receives the workflow result and confirms the written
-file, so "primary agent gets the result from agent A" holds in the DSH sense:
-A/B/C are all subagents of the primary, each on its own OpenRouter model.
+The primary agent then receives the result and confirms the written file, so
+"primary agent gets the result from agent A" holds in the DSH sense: A/B/C are
+all subagents of the primary, each on its own OpenRouter model.
 
 ## Files
 
 | Path | Purpose |
 |---|---|
-| `src/index.ts` | The driver plugin (`@dsh-demo/driver`): creates the primary agent, starts the workflow via `ctx.workflowEngine.start(...)`, prints the result, exits 0/1. The workflow script (with per-agent `provider`/`model`/`schema`) is embedded as `SCRIPT`. |
+| `src/index.ts` | The driver plugin (`@dsh-demo/driver`): creates the primary agent, orchestrates A/B/C via direct `subagents.start('spawn', ...)` calls, prints the result, exits 0/1. No workflow script string — the driver IS the orchestrator. |
 | `package.json` | `link:` deps to the DSH monorepo packages (same cordis instance as the running CLI), `tsx` + `typescript` dev deps. |
 | `tsconfig.json` | Typecheck config (`pnpm typecheck`). |
 | `~/.dsh/profiles/dsh-demo/package.json` | Profile definition: bundles `@deepseek-ai/dsh-base` only (no headless runner, no web). |
@@ -41,45 +41,43 @@ A/B/C are all subagents of the primary, each on its own OpenRouter model.
 
 - The CLI (`node .../apps/cli/lib/bin.js --profile dsh-demo`) boots a Cordis
   tree from the profile: `dsh-base` provides agents, sessions, llm-pi-ai
-  (openrouter route), tools (fs/bash/subagent/workflow), and the workflow
-  engine (`dsh-workflow-worker-thread`, provider `spawn`).
+  (openrouter route), tools (fs/bash/subagent), and the subagent service
+  (`dsh-subagent` with the in-process `spawn` provider).
 - The driver mounts as a plugin, awaits the loader, creates the primary agent
   with explicit `agentOptions: { provider: 'openrouter', model: '~deepseek/...' }`.
-- `ctx.workflowEngine.start({ script, meta, args: { cwd }, parent: primaryAgent })`
-  runs the plain-JS script in a worker-thread vm. Each `agent()` call spawns a
-  subagent of the primary with per-call `provider`/`model` and an
-  `outputSchema`; the host maps `schema` → `outputSchema` and
-  `provider`/`model` → `agentOptions` on the subagent seam.
+- Each child is a direct call to the subagent seam:
+  `subagents.start('spawn', { label, prompt, parent, signal, agentOptions, outputSchema })`
+  — the `spawn` provider is the same in-process driver the workflow engine
+  used, but now called straight from TypeScript. No script string, no vm
+  sandbox: the driver is the orchestrator, and `agent A`/`agent B`/`agent C`
+  are ordinary subagent runs.
 - Structured results come back through the child's `structured_output` tool
-  (attached by the in-process driver), so the script gets a typed value like
-  `{ number: 47 }` instead of free text.
-- The script branches on parity deterministically, spawns B or C to compute
-  and write the file (children inherit the fs tools + cwd from the parent),
-  and returns `{ number, odd, branch, file, value }`.
+  (attached by the in-process driver when `outputSchema` is set), so the
+  driver gets a typed value like `{ number: 47 }` instead of free text.
+- The driver branches on parity deterministically, then spawns B or C to
+  compute and write the file (children inherit the fs tools + cwd from the
+  parent).
 - The driver hands the result to the primary agent for a confirmation turn,
-  flushes the session, disposes the workflow run (terminates the worker
-  thread), and requests `appExit(0/1)`.
+  flushes the session, disposes each child run (reaches child quiescence so
+  the process can exit), and requests `appExit(0/1)`.
 
 ## Realtime output & timeouts
 
 The driver does **not** blindly wait for the final result:
 
-- **Realtime progress** — `watchWorkflow()` subscribes to the live event
-  firehose and prints, as it happens:
-  - `[A] started` / `[A] completed|failed|cancelled` — agent lifecycle
-    (`workflow/agent-start` / `workflow/agent-end`), prefixed with the
-    agent's name (the script's `label` option: `A`, `B`, `C`)
-  - `[wf] script: ...` — narration lines from the script's `log()` calls
-    (`workflow/log`; `[wf]` = workflow-level, not agent-bound)
+- **Realtime progress** — `watchChild()` subscribes to the live event
+  firehose (`session/event`, filtered to each child's session) and prints, as
+  it happens:
+  - `[A] started` / `[A] completed` — child lifecycle, prefixed with the
+    agent's name (`A`, `B`, `C`)
   - the **token stream** of every child agent as it is generated
-    (`session/event` → `assistant/chunk` text deltas), streamed under the
-    agent's prefix, plus `[A] → tool bash` lines each time a child calls a
-    tool (`tool/call`) — so you see agent A run `bash`, then
-    `structured_output`, live.
+    (`assistant/chunk` text deltas), streamed under the agent's prefix, plus
+    `[A] → tool bash` lines each time a child calls a tool (`tool/call`) — so
+    you see agent A run `bash`, then `structured_output`, live.
 - **Timeout** — set `config.timeoutMs` (e.g. via the profile patch) and the
-  run is given an `AbortSignal.timeout(...)`; on expiry the workflow and its
-  children are cancelled and the driver exits `1` with a clear message instead
-  of hanging. No timeout by default.
+  run is given an `AbortSignal.timeout(...)` shared by both children; on
+  expiry the active child is cancelled and the driver exits `1` with a clear
+  message instead of hanging. No timeout by default.
 
 ## Run it
 
@@ -97,7 +95,8 @@ loader, which the DSH loader uses for its imports.
 
 - Odd path: random number 45 → agent B computed `45 × 9 = 405` → `b.txt` = `405`
   (also 47→423, 57→513, 73→657 on earlier runs).
-- Even path: random number 50 → agent C computed `50 × 10 = 500` → `c.txt` = `500`.
+- Even path: random number 50 → agent C computed `50 × 10 = 500` → `c.txt` = `500`
+  (also 44→440 on the direct-orchestration run).
 - The primary agent confirmed the written file on disk in every run.
 - Process exits cleanly with code 0.
 
@@ -110,8 +109,7 @@ loader, which the DSH loader uses for its imports.
   comes back). Agent A is therefore told to run
   `node -e "console.log(Math.floor(Math.random()*100)+1)"` via the bash tool —
   still the subagent generating the number, but genuinely random.
-- The workflow worker thread keeps the process alive; `run.dispose()` must be
-  awaited before `appExit` or the process hangs past the CLI's force-exit
-  timer.
+- Each child run must be `dispose()`d after settling, or the child keeps the
+  process alive past the CLI's force-exit timer.
 - `ctx.appExit` is a launcher-provided host value (read via `ctx.get`, never
   injected).

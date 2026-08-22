@@ -29,9 +29,9 @@ importers:
       '@deepseek-ai/dsh-session':
         specifier: link:/Users/tyler.liu/src/ai/deepseek-harness/packages/core/session
         version: link:../deepseek-harness/packages/core/session
-      '@deepseek-ai/dsh-workflow':
-        specifier: link:/Users/tyler.liu/src/ai/deepseek-harness/packages/workflow/workflow
-        version: link:../deepseek-harness/packages/workflow/workflow
+      '@deepseek-ai/dsh-subagent':
+        specifier: link:/Users/tyler.liu/src/ai/deepseek-harness/packages/subagent/subagent
+        version: link:../deepseek-harness/packages/subagent/subagent
     devDependencies:
       '@biomejs/biome':
         specifier: ^2.5.8
