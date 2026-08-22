@@ -30,7 +30,6 @@ A/B/C are all subagents of the primary, each on its own OpenRouter model.
 | Path | Purpose |
 |---|---|
 | `src/index.ts` | The driver plugin (`@dsh-demo/driver`): creates the primary agent, starts the workflow via `ctx.workflowEngine.start(...)`, prints the result, exits 0/1. The workflow script (with per-agent `provider`/`model`/`schema`) is embedded as `SCRIPT`. |
-| `src/debug.ts` | Diagnostic harness used while developing (direct `ctx.subagents.start` + child event dump). Not part of the run; excluded from `tsconfig.json`. |
 | `package.json` | `link:` deps to the DSH monorepo packages (same cordis instance as the running CLI), `tsx` + `typescript` dev deps. |
 | `tsconfig.json` | Typecheck config (`pnpm typecheck`). |
 | `~/.dsh/profiles/dsh-demo/package.json` | Profile definition: bundles `@deepseek-ai/dsh-base` only (no headless runner, no web). |
