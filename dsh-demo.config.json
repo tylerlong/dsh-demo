@@ -1,0 +1,6 @@
+{
+	"settingsPath": "~/.dsh/settings.yaml",
+	"credentialsPath": "~/.dsh/.credentials.yaml",
+	"sessionsRoot": "~/.dsh/sessions",
+	"dshHome": "~/.dsh"
+}

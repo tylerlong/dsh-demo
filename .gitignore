@@ -1,6 +1,7 @@
 node_modules
 *.txt
-.dsh-sessions/
 
-# Secrets — never commit the local credential store.
+# Optional local overrides (only created if you point dsh-demo.config.json at them).
+.dsh-sessions/
 .credentials.yaml
+settings.yaml
