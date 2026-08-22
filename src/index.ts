@@ -17,7 +17,7 @@ import type {} from "@deepseek-ai/dsh-cmdline";
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
 import type { SessionEvent, SessionStore } from "@deepseek-ai/dsh-session";
 import { SessionId } from "@deepseek-ai/dsh-session";
-import type { WorkflowEngine } from "@deepseek-ai/dsh-workflow";
+import type { WorkflowEngine, WorkflowRun } from "@deepseek-ai/dsh-workflow";
 
 /** Stable Cordis plugin name. */
 export const name = "dsh-demo-driver";
@@ -29,6 +29,8 @@ export const inject = ["agents", "sessions"];
 export interface Config {
 	/** Directory b.txt/c.txt are written into (default: process.cwd()). */
 	outputDir?: string;
+	/** Abort the workflow after this many milliseconds (no timeout by default). */
+	timeoutMs?: number;
 }
 
 const PROVIDER = "openrouter";
@@ -63,7 +65,7 @@ const intSchema = (key) => ({ type: 'object', properties: { [key]: { type: 'inte
 // --- agent A: generate the random number (openai/gpt-5.6-luna) ---
 const a = await agent(
   'Generate a truly random integer between 1 and 100 by running the bash tool with this exact command: node -e "console.log(Math.floor(Math.random()*100)+1)". Read the printed number from the tool result, then report it by calling the structured_output tool with {"number": <the integer>}. Do not finish with plain text — only the structured_output tool call counts.',
-  { label: 'A-generate-number', provider: '${PROVIDER}', model: '${MODEL_A}', schema: intSchema('number') },
+  { label: 'A', provider: '${PROVIDER}', model: '${MODEL_A}', schema: intSchema('number') },
 )
 if (a === null) throw new Error('agent A failed to produce a random number')
 const number = a.number
@@ -74,11 +76,12 @@ const branch = odd ? 'B' : 'C'
 const factor = odd ? 9 : 10
 const file = odd ? 'b.txt' : 'c.txt'
 const model = odd ? '${MODEL_B}' : '${MODEL_C}'
+log('random number = ' + number + ' (' + (odd ? 'odd' : 'even') + ') -> agent ' + branch)
 
 // --- agent B/C: compute and write the file ---
 const r = await agent(
   'The random number is ' + number + '. Compute ' + number + ' * ' + factor + ' = ? and write the result to ' + file + ' at the absolute path ' + args.cwd + '/' + file + ' using the write tool. Then report your computed value by calling the structured_output tool with {"value": <the integer>}. Do not finish with plain text — only the structured_output tool call counts.',
-  { label: branch + '-compute-write', provider: '${PROVIDER}', model, schema: intSchema('value') },
+  { label: branch, provider: '${PROVIDER}', model, schema: intSchema('value') },
 )
 if (r === null) throw new Error('agent ' + branch + ' failed')
 
@@ -134,25 +137,89 @@ async function summarize(
 	if (summary !== "") console.log(`[dsh-demo] primary agent: ${summary}`);
 }
 
+/**
+ * Print realtime workflow progress: agent lifecycle, script log lines, and the
+ * token-level stream of every child (session/event is the live firehose).
+ * Every agent-bound line is prefixed with the agent's name. Returns a disposer.
+ */
+function watchWorkflow(ctx: Context, run: WorkflowRun): () => void {
+	// Child session id -> agent label, filled by agent-start events.
+	const labels = new Map<SessionId, string>();
+	// Child session ids currently streaming tokens (label prefix already printed).
+	const streaming = new Set<SessionId>();
+
+	const disposers = [
+		ctx.on("workflow/agent-start", (info, agent) => {
+			if (info.id !== run.id) return;
+			labels.set(agent.childId, agent.label);
+			console.log(`[${agent.label}] started`);
+		}),
+		ctx.on("workflow/agent-end", (info, agent) => {
+			if (info.id !== run.id) return;
+			console.log(`[${agent.label}] ${agent.outcome}`);
+		}),
+		ctx.on("workflow/log", (info, message) => {
+			if (info.id !== run.id) return;
+			console.log(`[wf] script: ${message}`);
+		}),
+		ctx.on("session/event", (session, event) => {
+			const label = labels.get(session.id);
+			if (label === undefined) return;
+			if (
+				event.type === "assistant/chunk" &&
+				event.data.chunk.type === "text-delta"
+			) {
+				// Prefix once per stream, then keep appending tokens to the same line.
+				if (!streaming.has(session.id)) {
+					process.stdout.write(`\n[${label}] `);
+					streaming.add(session.id);
+				}
+				process.stdout.write(event.data.chunk.text);
+			} else if (event.type === "tool/call") {
+				process.stdout.write(`\n[${label}] → tool ${event.data.name}\n`);
+			} else if (event.type === "turn/end") {
+				process.stdout.write("\n");
+				streaming.delete(session.id);
+			}
+		}),
+	];
+	return () => {
+		for (const dispose of disposers) dispose();
+	};
+}
+
 /** Run the workflow script and return its value, disposing the worker thread. */
 async function runWorkflow(
+	ctx: Context,
 	engine: WorkflowEngine,
 	parent: Agent,
 	cwd: string,
+	timeoutMs: number | undefined,
 ): Promise<WorkflowValue> {
+	// An aborted signal cancels the run and its children — no blind wait.
+	const signal =
+		timeoutMs === undefined ? undefined : AbortSignal.timeout(timeoutMs);
 	const run = engine.start({
 		script: SCRIPT,
 		meta: META,
 		args: { cwd },
 		parent,
+		signal,
 	});
+	const stopWatching = watchWorkflow(ctx, run);
 	try {
 		const result = await run.result;
+		if (result.stopReason === "cancelled") {
+			throw new Error(
+				`workflow cancelled (timeout ${timeoutMs}ms): ${result.error ?? ""}`,
+			);
+		}
 		if (result.stopReason !== "completed") {
 			throw new Error(`workflow ${result.stopReason}: ${result.error ?? ""}`);
 		}
 		return result.value as WorkflowValue;
 	} finally {
+		stopWatching();
 		await run.dispose(); // terminate the worker thread so the process can exit
 	}
 }
@@ -181,7 +248,7 @@ async function run(ctx: Context, config: Config): Promise<number> {
 	try {
 		await agent.whenIdle();
 
-		const value = await runWorkflow(engine, agent, cwd);
+		const value = await runWorkflow(ctx, engine, agent, cwd, config.timeoutMs);
 		console.log(
 			`[dsh-demo] random number = ${value.number} (${value.odd ? "odd" : "even"})`,
 		);

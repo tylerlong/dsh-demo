@@ -60,6 +60,27 @@ A/B/C are all subagents of the primary, each on its own OpenRouter model.
   flushes the session, disposes the workflow run (terminates the worker
   thread), and requests `appExit(0/1)`.
 
+## Realtime output & timeouts
+
+The driver does **not** blindly wait for the final result:
+
+- **Realtime progress** — `watchWorkflow()` subscribes to the live event
+  firehose and prints, as it happens:
+  - `[A] started` / `[A] completed|failed|cancelled` — agent lifecycle
+    (`workflow/agent-start` / `workflow/agent-end`), prefixed with the
+    agent's name (the script's `label` option: `A`, `B`, `C`)
+  - `[wf] script: ...` — narration lines from the script's `log()` calls
+    (`workflow/log`; `[wf]` = workflow-level, not agent-bound)
+  - the **token stream** of every child agent as it is generated
+    (`session/event` → `assistant/chunk` text deltas), streamed under the
+    agent's prefix, plus `[A] → tool bash` lines each time a child calls a
+    tool (`tool/call`) — so you see agent A run `bash`, then
+    `structured_output`, live.
+- **Timeout** — set `config.timeoutMs` (e.g. via the profile patch) and the
+  run is given an `AbortSignal.timeout(...)`; on expiry the workflow and its
+  children are cancelled and the driver exits `1` with a clear message instead
+  of hanging. No timeout by default.
+
 ## Run it
 
 ```bash
