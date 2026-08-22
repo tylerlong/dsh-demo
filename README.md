@@ -2,10 +2,10 @@
 
 Drives the DeepSeek Harness (DSH) from two plain Node scripts instead of
 browser tabs or the `dsh` CLI, exercising per-agent model routing and subagent
-orchestration. Both scripts are **standalone**: no Cordis plugin shape, no
-`dsh --profile`, no profile directory, nothing to mount. The only external
-dependency is the DSH harness home (`~/.dsh`): `settings.yaml` (model routes /
-credentials) plus its auto-maintained flat module fallback.
+orchestration. Both scripts are **standalone and fully project-local**: no
+Cordis plugin shape, no `dsh --profile`, no profile directory, and **no reads
+from `~/.dsh` at all** — every harness-home path is redirected to a
+project-local file/dir by a patch layer in `src/boot.ts`.
 
 ## The demo workflow (exactly as specified)
 
@@ -35,13 +35,15 @@ all subagents of the primary, each on its own model.
 |---|---|
 | `src/index.ts` | **Demo 1** — the script above: primary + A/B/C with per-agent `subagents.start('spawn', ...)` calls. `pnpm demo`. |
 | `src/enhanced-flow.ts` | **Demo 2** — generic "task + review loop". `pnpm enhanced`. |
-| `src/boot.ts` | Shared standalone boot: resolves the `@deepseek-ai/dsh-base` bundle, boots the tree via `boot()`, points bare-module resolution at the harness-home flat fallback, provides `cmdlineArgs`/`appExit`. |
+| `src/boot.ts` | Shared standalone boot: resolves the `@deepseek-ai/dsh-base` bundle, boots the tree via `boot()`, points bare-module resolution at the DSH monorepo's pnpm virtual store, and applies a **local patch layer** redirecting every `~/.dsh` read to a project-local file. |
 | `root.cordis.yml` | Empty plugin list — the tree is composed purely from the base bundle patches; it is the root include each script boots. |
+| `settings.yaml` | **Project-local copy** of the harness settings (openrouter provider + models, `apiKeyEnv`). No secrets. |
+| `.credentials.yaml` | **Project-local credential store** (the OpenRouter key). Gitignored, mode 0600. |
+| `.dsh-sessions/` | Project-local session logs (created on first run). Gitignored. |
 | `package.json` | `link:` deps to the DSH monorepo packages, `tsx` SDK dev deps, `demo` / `enhanced` scripts. |
 | `tsconfig.json` | Typecheck config (`pnpm typecheck`). |
-| `~/.dsh/settings.yaml` | The ONE external dependency: `openai/gpt-5.6-luna` etc. under the `openrouter` provider, plus credentials. |
 
-## How a standalone script boots
+## How a standalone script boots (fully local)
 
 Neither script is a plugin — there is no `name`/`inject`/`apply` export and no
 `cordis.patch.yml` mount. Each is a plain entry point that composes the tree
@@ -50,28 +52,33 @@ itself via `src/boot.ts`:
 1. resolve the `@deepseek-ai/dsh-base` bundle from the DSH installation anchor
    (its patch lists the full base plugin set: agents, sessions, llm-pi-ai
    openrouter route, fs/bash/subagent tools, subagent service);
-2. load that bundle's overlay patches with `loadOverlayPatches`;
-3. call `boot("...", root.cordis.yml, patches, prepare)` — the public API
+2. load that bundle's overlay patches;
+3. append a **local patch layer** — id-targeted config overrides that redirect
+   every harness-home read to this project: `settings` → `./settings.yaml`,
+   `credentials` → `./.credentials.yaml`, `session-persistence-jsonl` →
+   `./.dsh-sessions`, plus `dshHome` overrides for agent-instructions,
+   skill-filesystem, attachment-local, shell-env;
+4. call `boot("...", root.cordis.yml, patches, prepare)` — the public API
    `@deepseek-ai/dsh-app-boot` exports for exactly this kind of embedding;
-   with `bareModuleBaseUrl` pointed at `~/.dsh/profiles/node_modules`, every
-   bare `@deepseek-ai/*` specifier resolves from the harness-home flat fallback
-   (auto-maintained by `healProfilesModuleFallback`) — **no profile directory
-   is read**;
-4. provide `cmdlineArgs` + `appExit` (the same host values the CLI would).
+   with `bareModuleBaseUrl` pointed at the DSH monorepo's
+   `node_modules/.pnpm/node_modules`, every bare `@deepseek-ai/*` specifier
+   resolves from the installation's own virtual store — **no `~/.dsh/profiles`
+   flat fallback, no profile directory**;
+5. provide `cmdlineArgs` + `appExit` (the same host values the CLI would).
 
 Then the script drives `agents` / `sessions` / `subagents` straight off the
 returned context, exactly like the driver plugin did — only now it owns the
 boot and exit itself.
 
-### Why this is standalone but still needs `~/.dsh`
+### Why this is standalone
 
 The `llm-pi-ai` adapter is **mounted dormant**: the OpenRouter route doesn't
-exist until a `llm-pi-ai.providers.openrouter` section in `~/.dsh/settings.yaml`
-supplies it (and keys resolve per request through its `apiKeyEnv`). So the
-scripts need the harness home for the configured model routes + credentials —
-that's the deliberate, minimal coupling. No profile, no plugin mount, no
-project-local config file exists for task/model/rounds except the CLI flags
-documented below.
+exist until a `llm-pi-ai.providers.openrouter` section supplies it, and keys
+resolve per request through `apiKeyEnv`. Both of those now come from
+**project-local** files (`settings.yaml` + `.credentials.yaml`), so the
+scripts need nothing under `~/.dsh`. The only dependency is the DSH
+installation itself (the harness) — which is inherent, since these scripts
+*are* DSH programs.
 
 ## Demo 1 — `src/index.ts`
 
@@ -169,3 +176,9 @@ pnpm enhanced
   `src/boot.ts`, not by the CLI.
 - Relative imports use the `.ts` extension (tsx at runtime needs it), so
   `tsconfig.json` sets `allowImportingTsExtensions` (fine under `noEmit`).
+- The OpenRouter key lives in the project-local `.credentials.yaml`
+  (gitignored, mode 0600). It is resolved by the `credentials` service
+  through `apiKeyEnv: OPENROUTER_API_KEY` — the same mechanism the harness
+  home used, now pointed at the project file by the local patch layer in
+  `src/boot.ts`. To rotate the key, edit `.credentials.yaml` (or set
+  `OPENROUTER_API_KEY` in the process env, which wins).

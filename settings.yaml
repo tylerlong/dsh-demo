@@ -1,0 +1,45 @@
+ui-onboarding:
+  welcomeNoticeVersion: 2026-08-13.1
+llm-pi-ai:
+  providers:
+    openrouter:
+      apiKeyEnv: OPENROUTER_API_KEY
+      models:
+        - id: deepseek/deepseek-v4-pro-0813
+          name: DeepSeek V4 Pro 0813
+        - id: ~z-ai/glm-latest
+          name: GLM Latest
+        - id: ~moonshotai/kimi-latest
+          name: Kimi Latest
+        - id: ~x-ai/grok-latest
+          name: Grok Latest
+        - id: tencent/hy3
+          name: Tencent Hy3
+        - id: google/gemini-3.7-flash
+          name: Gemini 3.7 Flash
+        - id: openai/gpt-5.6-luna
+          name: GPT 5.6 Luna
+        - id: deepseek/deepseek-v4-flash-0731
+          name: DeepSeek V4 Flash 0731
+agent-default-model:
+  provider: openrouter
+  model: deepseek/deepseek-v4-flash-0731
+locale:
+  preference: en
+ui-conversation:
+  busyEnter: steer
+llm-deepseek:
+  models: []
+agent-presets:
+  default: code
+web-search-deepseek:
+  maxUses: 16
+agent-loop:
+  maxParallelToolCalls: 64
+shell:
+  maxOutputBytes: 128000
+  timeoutMs: 120000
+permission:
+  defaultPreset: danger-full-access
+ui-theme:
+  preference: system
