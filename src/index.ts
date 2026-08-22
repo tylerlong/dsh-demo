@@ -1,13 +1,15 @@
 /**
- * @dsh-demo/driver — DeepSeek Harness as a script.
+ * The first demo, standalone: a DSH agent script with no plugin shape.
  *
  * The PRIMARY agent (deepseek/deepseek-v4-flash-0731) spawns agent A
- * (openai/gpt-5.6-luna) to generate a random integer; the driver branches on
+ * (openai/gpt-5.6-luna) to generate a random integer; the script branches on
  * parity in plain TypeScript, then spawns agent B (deepseek, n*9 -> b.txt) or
  * agent C (openai/gpt-5.6-luna, n*10 -> c.txt). The primary reports the result.
  *
  * Orchestration is DIRECT: every child is a `subagents.start('spawn', ...)`
  * call — no workflow script string, no vm sandbox.
+ *
+ * Run with:  pnpm demo
  */
 
 import { randomUUID } from "node:crypto";
@@ -17,19 +19,12 @@ import { APP_IDENTITY, createUserMessage } from "@deepseek-ai/dsh-llm";
 import type { SessionStore } from "@deepseek-ai/dsh-session";
 import { SessionId } from "@deepseek-ai/dsh-session";
 import type { SubagentRuntime } from "@deepseek-ai/dsh-subagent";
+import { bootHarness, shutdown } from "./boot.ts";
 
-// White-label the User-Agent every provider request sends (Omits the block to keep the DSH default).
+// White-label the User-Agent every provider request sends.
 APP_IDENTITY.product = "opencode";
 APP_IDENTITY.version = "1.18.11";
 APP_IDENTITY.url = "https://opencode.ai";
-
-export const name = "dsh-demo-driver";
-export const inject = ["agents", "sessions", "subagents"];
-
-export interface Config {
-	outputDir?: string;
-	timeoutMs?: number;
-}
 
 const PROVIDER = "openrouter";
 const PRIMARY = "deepseek/deepseek-v4-flash-0731";
@@ -64,65 +59,55 @@ function promptBC(
 	return `The random number is ${number}. Compute ${number} * ${factor} = ? and write the result to ${file} at the absolute path ${cwd}/${file} using the write tool. Then report your computed value by calling the structured_output tool with {"value": <the integer>}. Do not finish with plain text — only the structured_output tool call counts.`;
 }
 
-/**
- * Build a child runner bound to this run's context. It spawns one child,
- * streams its tokens/tool calls live, and resolves the schema'd value.
- */
-function makeRunner(
+/** Spawn one child, stream its tokens live, resolve to the schema value. */
+async function child(
 	ctx: Context,
 	subagents: SubagentRuntime,
 	parent: Agent,
-	signal: AbortSignal,
-) {
-	return async (
-		label: string,
-		prompt: string,
-		model: string,
-		schema: IntSchema,
-	): Promise<unknown> => {
-		console.log(`[${label}] started`);
-		const run = await subagents.start(SPAWN, {
-			label,
-			prompt: [{ type: "text", text: prompt }],
-			parent,
-			signal,
-			agentOptions: { provider: PROVIDER, model },
-			outputSchema: schema,
-		});
-		let streaming = false;
-		const stop = ctx.on("session/event", (session, event) => {
-			if (session.id !== run.id) return;
-			if (
-				event.type === "assistant/chunk" &&
-				event.data.chunk.type === "text-delta"
-			) {
-				if (!streaming) {
-					process.stdout.write(`\n[${label}] `);
-					streaming = true;
-				}
-				process.stdout.write(event.data.chunk.text);
-			} else if (event.type === "tool/call") {
-				process.stdout.write(`\n[${label}] → tool ${event.data.name}\n`);
-			} else if (event.type === "turn/end") {
-				process.stdout.write("\n");
-				streaming = false;
+	label: string,
+	prompt: string,
+	model: string,
+	schema: IntSchema,
+): Promise<unknown> {
+	console.log(`[${label}] started`);
+	const run = await subagents.start(SPAWN, {
+		label,
+		prompt: [{ type: "text", text: prompt }],
+		parent,
+		signal: new AbortController().signal,
+		agentOptions: { provider: PROVIDER, model },
+		outputSchema: schema,
+	});
+	let streaming = false;
+	const stop = ctx.on("session/event", (session, event) => {
+		if (session.id !== run.id) return;
+		if (
+			event.type === "assistant/chunk" &&
+			event.data.chunk.type === "text-delta"
+		) {
+			if (!streaming) {
+				process.stdout.write(`\n[${label}] `);
+				streaming = true;
 			}
-		});
-		try {
-			const result = await run.result;
-			if (
-				result.stopReason !== "completed" ||
-				result.structured === undefined
-			) {
-				throw new Error(`agent ${label} ${result.stopReason}`);
-			}
-			console.log(`[${label}] completed`);
-			return result.structured;
-		} finally {
-			stop();
-			await run.dispose();
+			process.stdout.write(event.data.chunk.text);
+		} else if (event.type === "tool/call") {
+			process.stdout.write(`\n[${label}] → tool ${event.data.name}\n`);
+		} else if (event.type === "turn/end") {
+			process.stdout.write("\n");
+			streaming = false;
 		}
-	};
+	});
+	try {
+		const result = await run.result;
+		if (result.stopReason !== "completed" || result.structured === undefined) {
+			throw new Error(`agent ${label} ${result.stopReason}`);
+		}
+		console.log(`[${label}] completed`);
+		return result.structured;
+	} finally {
+		stop();
+		await run.dispose();
+	}
 }
 
 /** Ask the primary agent to confirm the written file and summarize the run. */
@@ -160,24 +145,17 @@ async function summarize(
 	);
 }
 
-async function run(ctx: Context, config: Config): Promise<number> {
+async function run(ctx: Context): Promise<number> {
 	await ctx.get("loader")?.await();
 	const agents = ctx.get("agents");
 	const sessions = ctx.get("sessions");
 	const subagents = ctx.get("subagents");
 	if (!agents || !sessions || !subagents) {
-		console.error(
-			"dsh-demo-driver: missing services (agents/sessions/subagents)",
-		);
+		console.error("dsh-demo: missing services (agents/sessions/subagents)");
 		return 1;
 	}
 
-	const cwd = config.outputDir ?? process.cwd();
-	const signal =
-		config.timeoutMs === undefined
-			? new AbortController().signal
-			: AbortSignal.timeout(config.timeoutMs);
-
+	const cwd = process.cwd();
 	const { agent, dispose } = await agents.create({
 		sessionId: SessionId(`session-${randomUUID()}`),
 		meta: { cwd },
@@ -185,11 +163,15 @@ async function run(ctx: Context, config: Config): Promise<number> {
 	});
 	try {
 		await agent.whenIdle();
-		const child = makeRunner(ctx, subagents, agent, signal);
-
-		const { number } = (await child("A", PROMPT_A, MODEL_A, int("number"))) as {
-			number: number;
-		};
+		const { number } = (await child(
+			ctx,
+			subagents,
+			agent,
+			"A",
+			PROMPT_A,
+			MODEL_A,
+			int("number"),
+		)) as { number: number };
 
 		const odd = number % 2 !== 0;
 		const branch = odd ? "B" : "C";
@@ -200,6 +182,9 @@ async function run(ctx: Context, config: Config): Promise<number> {
 		);
 
 		const { value } = (await child(
+			ctx,
+			subagents,
+			agent,
 			branch,
 			promptBC(number, factor, file, cwd),
 			odd ? MODEL_B : MODEL_C,
@@ -224,16 +209,14 @@ async function run(ctx: Context, config: Config): Promise<number> {
 	}
 }
 
-export function apply(ctx: Context, config: Config | undefined): void {
-	const exit = ctx.get("appExit");
-	if (exit === undefined)
-		throw new Error(
-			"dsh-demo-driver: the launcher must provide ctx.appExit before the tree mounts",
-		);
-	void run(ctx, config ?? {}).then(exit, (error) => {
-		console.error(
-			`dsh-demo-driver: ${error instanceof Error ? error.message : error}`,
-		);
-		exit(1);
-	});
+let ctx: Context | undefined;
+let code = 1;
+try {
+	ctx = await bootHarness();
+	code = await run(ctx);
+} catch (error) {
+	console.error(`dsh-demo: ${error instanceof Error ? error.message : error}`);
+} finally {
+	if (ctx !== undefined) await shutdown(ctx, code);
 }
+process.exit(code);

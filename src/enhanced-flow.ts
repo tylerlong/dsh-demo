@@ -1,8 +1,9 @@
 /**
- * @dsh-demo/enhanced-flow — generic "task + review loop" driver.
+ * The enhanced demo, standalone: generic "task + review loop" driver with no
+ * plugin shape.
  *
- * A task-agnostic enhanced workflow: the PRIMARY agent does the task from the
- * user's task + requirements; then a review loop runs until convergence:
+ * The PRIMARY agent (deepseek/deepseek-v4-flash-0731) does the task from the
+ * user's TASK + REQUIREMENTS; then a review loop runs until convergence:
  *
  *   1. a brand-new REVIEWER sub-agent (fresh spawn, no primary context)
  *      re-reads the same task + requirements + the final artifacts and gives
@@ -13,50 +14,33 @@
  *      against the fixed artifacts; it stops when the reviewer has no more
  *      feedback or every feedback was rejected.
  *
- * Everything is config-driven (task, requirements, models, output dir, round
- * cap), so the same driver serves any task. The reviewer runs on its own
- * model (default openai/gpt-5.6-luna) and is restricted to read-only tools.
+ * The task + requirements ALWAYS come from the user at run time — never from
+ * config or environment:
+ *   - input file path (first non-flag CLI argument: line 1 = task,
+ *     line 2 = requirements), or
+ *   - interactive prompts on stdin (only when stdin is a real TTY).
+ *
+ * Run with:  pnpm enhanced [input-file] [--output-dir DIR] [--max-rounds N]
+ *                           [--timeout-ms N] [--primary-model M] [--reviewer-model M]
  */
 
 import { randomUUID } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { createInterface } from "node:readline/promises";
 import type { Context } from "@deepseek-ai/cordis";
 import type { Agent } from "@deepseek-ai/dsh-agent";
+import type { CmdlineArgs } from "@deepseek-ai/dsh-cmdline";
 import { APP_IDENTITY, createUserMessage } from "@deepseek-ai/dsh-llm";
 import type { SessionEvent } from "@deepseek-ai/dsh-session";
 import { SessionId } from "@deepseek-ai/dsh-session";
 import type { SubagentRuntime } from "@deepseek-ai/dsh-subagent";
+import { bootHarness, shutdown } from "./boot.ts";
 
-// White-label the User-Agent every provider request sends (same trick as the
-// demo driver; omit to keep the DSH default).
+// White-label the User-Agent every provider request sends.
 APP_IDENTITY.product = "opencode";
 APP_IDENTITY.version = "1.18.11";
 APP_IDENTITY.url = "https://opencode.ai";
-
-/** Stable Cordis plugin name. */
-export const name = "dsh-demo-enhanced-flow";
-
-/** Core services required before the run can start. */
-export const inject = ["agents", "sessions", "subagents"];
-
-/** Everything the enhanced flow needs; the user supplies task + requirements. */
-export interface Config {
-	/** What to do (any task). */
-	task: string;
-	/** Detailed (or brief) instructions and requirements for the task. */
-	requirements: string;
-	/** Model for the primary agent (default: deepseek/deepseek-v4-flash-0731). */
-	primaryModel?: string;
-	/** Model for every reviewer sub-agent (default: openai/gpt-5.6-luna). */
-	reviewerModel?: string;
-	/** Directory where the primary writes artifacts and reviewers inspect (default: process.cwd()). */
-	outputDir?: string;
-	/** Safety cap on review rounds (default: 5). */
-	maxRounds?: number;
-	/** Abort the run after this many milliseconds (no timeout by default). */
-	timeoutMs?: number;
-}
 
 const PROVIDER = "openrouter";
 const DEFAULT_PRIMARY = "deepseek/deepseek-v4-flash-0731";
@@ -66,6 +50,20 @@ const SPAWN = "spawn";
 const REVIEWER_TOOLS = ["read", "read_image", "glob", "grep"] as const;
 /** Cap on embedded artifact bytes per round, to keep reviewer prompts sane. */
 const MAX_EMBED_BYTES = 32 * 1024;
+
+/** Run configuration, all from CLI flags with a default each. */
+interface Config {
+	/** Where the primary writes artifacts and reviewers inspect. */
+	outputDir: string;
+	/** Safety cap on review rounds. */
+	maxRounds: number;
+	/** Abort the run after this many milliseconds (no timeout by default). */
+	timeoutMs: number | undefined;
+	/** Model for the primary agent. */
+	primaryModel: string;
+	/** Model for every reviewer sub-agent. */
+	reviewerModel: string;
+}
 
 /** One reviewer feedback item. */
 interface Feedback {
@@ -112,9 +110,104 @@ const feedbackSchema: {
 	additionalProperties: false,
 };
 
+/** Parse CLI flags into a {@link Config}. Unknown flags are ignored. */
+function parseArgs(args: readonly string[]): Config {
+	const config: Config = {
+		outputDir: process.cwd(),
+		maxRounds: 5,
+		timeoutMs: undefined,
+		primaryModel: DEFAULT_PRIMARY,
+		reviewerModel: DEFAULT_REVIEWER,
+	};
+	for (let i = 0; i < args.length; i += 1) {
+		const arg = args[i] ?? "";
+		const value = args[i + 1];
+		const take = (): string => {
+			const next = value ?? "";
+			i += 1;
+			return next;
+		};
+		switch (arg) {
+			case "--output-dir":
+				config.outputDir = resolve(take());
+				break;
+			case "--max-rounds": {
+				const n = Number(take());
+				if (Number.isFinite(n) && n > 0) config.maxRounds = n;
+				break;
+			}
+			case "--timeout-ms": {
+				const n = Number(take());
+				if (Number.isFinite(n) && n > 0) config.timeoutMs = n;
+				break;
+			}
+			case "--primary-model":
+				config.primaryModel = take();
+				break;
+			case "--reviewer-model":
+				config.reviewerModel = take();
+				break;
+			default:
+				break;
+		}
+	}
+	return config;
+}
+
 /** Render any thrown value as a message string. */
 function messageOf(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
+}
+
+/** Ask the user one question on stdin and return their trimmed answer. */
+async function promptLine(prompt: string): Promise<string> {
+	const rl = createInterface({ input: process.stdin, output: process.stdout });
+	try {
+		return (await rl.question(prompt)).trim();
+	} finally {
+		rl.close();
+	}
+}
+
+/**
+ * Resolve the task + requirements for this run. The task is always user
+ * input, never config or environment. An input file path (first non-flag CLI
+ * argument) wins; otherwise, when stdin is a real terminal, the user is
+ * prompted. A pipe is not a terminal, so there is no prompt and no hang.
+ *
+ * Input file format (one task + one requirements line):
+ *
+ *   Write a haiku about the sea into a file named poem.txt
+ *   The poem must follow the 5-7-5 syllable pattern and contain the word "waves".
+ */
+async function resolveInputs(
+	args: readonly string[],
+): Promise<{ task: string; requirements: string }> {
+	const fileArg = args.find((arg) => !arg.startsWith("-"));
+	if (fileArg !== undefined) {
+		const text = await readFile(fileArg, "utf8");
+		const [task, requirements] = text.split("\n");
+		if (task === undefined || requirements === undefined) {
+			throw new Error(
+				`dsh-demo-enhanced-flow: input file ${fileArg} must have a task line and a requirements line`,
+			);
+		}
+		return { task: task.trim(), requirements: requirements.trim() };
+	}
+	const tty = process.stdin.isTTY === true;
+	if (!tty) {
+		throw new Error(
+			"dsh-demo-enhanced-flow: no task provided. Pass an input file as a CLI argument (first line: task, second line: requirements), or run in a terminal and answer the prompts.",
+		);
+	}
+	const task = (await promptLine("TASK: ")).trim();
+	const requirements = (await promptLine("REQUIREMENTS: ")).trim();
+	if (task === "" || requirements === "") {
+		throw new Error(
+			"dsh-demo-enhanced-flow: task and requirements must not be empty",
+		);
+	}
+	return { task, requirements };
 }
 
 /** Last assistant text in a session's events. */
@@ -204,12 +297,16 @@ async function artifactReport(dir: string): Promise<string> {
 }
 
 /** Build the reviewer prompt: same inputs as the primary had + final artifacts. */
-function reviewerPrompt(config: Config, artifacts: string): string {
+function reviewerPrompt(
+	task: string,
+	requirements: string,
+	artifacts: string,
+): string {
 	return [
 		"You are a REVIEWER. You must NOT redo the task. Review the final result produced by another agent and give feedback.",
 		"",
-		`TASK: ${config.task}`,
-		`REQUIREMENTS: ${config.requirements}`,
+		`TASK: ${task}`,
+		`REQUIREMENTS: ${requirements}`,
 		"",
 		"FINAL RESULT / ARTIFACTS (in the output directory):",
 		artifacts,
@@ -226,7 +323,12 @@ async function runReviewer(
 	ctx: Context,
 	subagents: SubagentRuntime,
 	parent: Agent,
-	config: Config,
+	opts: {
+		task: string;
+		requirements: string;
+		outputDir: string;
+		reviewerModel: string;
+	},
 	signal: AbortSignal,
 ): Promise<Feedback[]> {
 	console.log(`[reviewer] round start`);
@@ -236,8 +338,9 @@ async function runReviewer(
 			{
 				type: "text",
 				text: reviewerPrompt(
-					config,
-					await artifactReport(config.outputDir ?? process.cwd()),
+					opts.task,
+					opts.requirements,
+					await artifactReport(opts.outputDir),
 				),
 			},
 		],
@@ -245,7 +348,7 @@ async function runReviewer(
 		signal,
 		agentOptions: {
 			provider: PROVIDER,
-			model: config.reviewerModel ?? DEFAULT_REVIEWER,
+			model: opts.reviewerModel,
 		},
 		outputSchema: feedbackSchema,
 		toolFilter: { allow: REVIEWER_TOOLS },
@@ -324,7 +427,12 @@ async function adjudicate(
 }
 
 /** Drive the whole enhanced flow and return the process exit code. */
-async function run(ctx: Context, config: Config): Promise<number> {
+async function run(
+	ctx: Context,
+	config: Config,
+	task: string,
+	requirements: string,
+): Promise<number> {
 	await ctx.get("loader")?.await();
 	const agents = ctx.get("agents");
 	const sessions = ctx.get("sessions");
@@ -340,8 +448,8 @@ async function run(ctx: Context, config: Config): Promise<number> {
 		return 1;
 	}
 
-	const outputDir = config.outputDir ?? process.cwd();
-	const maxRounds = config.maxRounds ?? 5;
+	const outputDir = config.outputDir;
+	const maxRounds = config.maxRounds;
 	const signal =
 		config.timeoutMs === undefined
 			? new AbortController().signal
@@ -353,7 +461,7 @@ async function run(ctx: Context, config: Config): Promise<number> {
 		meta: { cwd: outputDir },
 		agentOptions: {
 			provider: PROVIDER,
-			model: config.primaryModel ?? DEFAULT_PRIMARY,
+			model: config.primaryModel,
 		},
 	});
 	const stopWatching = watchAgent(ctx, agent.session.id, "primary");
@@ -361,12 +469,12 @@ async function run(ctx: Context, config: Config): Promise<number> {
 		await agent.whenIdle();
 
 		// 1. primary does the task from the user's inputs
-		console.log(`[primary] starting task: ${config.task}`);
+		console.log(`[primary] starting task: ${task}`);
 		await primaryTurn(
 			agent,
 			[
-				`TASK: ${config.task}`,
-				`REQUIREMENTS: ${config.requirements}`,
+				`TASK: ${task}`,
+				`REQUIREMENTS: ${requirements}`,
 				`Work in the output directory ${outputDir} and write your final result/artifacts there.`,
 				"When done, reply with a short summary of what you produced.",
 			].join("\n"),
@@ -383,7 +491,12 @@ async function run(ctx: Context, config: Config): Promise<number> {
 				ctx,
 				subagents,
 				agent,
-				config,
+				{
+					task,
+					requirements,
+					outputDir,
+					reviewerModel: config.reviewerModel,
+				},
 				signal,
 			);
 			if (feedbacks.length === 0) {
@@ -415,16 +528,17 @@ async function run(ctx: Context, config: Config): Promise<number> {
 	}
 }
 
-/** Mount the one-shot enhanced-flow driver. */
-export function apply(ctx: Context, config: Config | undefined): void {
-	const exit = ctx.get("appExit");
-	if (exit === undefined) {
-		throw new Error(
-			"dsh-demo-enhanced-flow: the launcher must provide ctx.appExit before the tree mounts",
-		);
-	}
-	void run(ctx, config ?? ({} as Config)).then(exit, (error) => {
-		console.error(`dsh-demo-enhanced-flow: ${messageOf(error)}`);
-		exit(1);
-	});
+let ctx: Context | undefined;
+let code = 1;
+try {
+	ctx = await bootHarness(process.argv.slice(2));
+	const args = (ctx.get("cmdlineArgs") as CmdlineArgs | undefined)?.get() ?? [];
+	const config = parseArgs(args);
+	const { task, requirements } = await resolveInputs(args);
+	code = await run(ctx, config, task, requirements);
+} catch (error) {
+	console.error(`dsh-demo-enhanced-flow: ${messageOf(error)}`);
+} finally {
+	if (ctx !== undefined) await shutdown(ctx, code);
 }
+process.exit(code);

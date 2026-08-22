@@ -1,30 +1,26 @@
 {
-	"name": "@dsh-demo/driver",
+	"name": "@dsh-demo/scripts",
 	"version": "0.1.0",
 	"private": true,
 	"type": "module",
-	"main": "src/index.ts",
-	"exports": {
-		".": "./src/index.ts",
-		"./enhanced-flow": "./src/enhanced-flow.ts"
-	},
 	"engines": {
 		"node": "^22.19.0 || >=24.0.0",
 		"pnpm": ">=11"
 	},
 	"packageManager": "pnpm@11.22.0",
 	"scripts": {
-		"demo": "node --import tsx /Users/tyler.liu/src/ai/deepseek-harness/apps/cli/lib/bin.js --profile dsh-demo",
+		"demo": "tsx src/index.ts",
+		"enhanced": "tsx src/enhanced-flow.ts",
 		"typecheck": "tsc --noEmit",
 		"lint": "biome check . --write",
 		"format": "biome format . --write"
 	},
 	"dependencies": {
 		"@deepseek-ai/cordis": "link:/Users/tyler.liu/src/ai/deepseek-harness/vendor/cordis",
-		"@deepseek-ai/cordis-plugin-loader": "link:/Users/tyler.liu/src/ai/deepseek-harness/vendor/loader",
 		"@deepseek-ai/dsh-agent": "link:/Users/tyler.liu/src/ai/deepseek-harness/packages/core/agent",
-		"@deepseek-ai/dsh-agent-default-model": "link:/Users/tyler.liu/src/ai/deepseek-harness/packages/core/agent-default-model",
+		"@deepseek-ai/dsh-app-boot": "link:/Users/tyler.liu/src/ai/deepseek-harness/packages/boot/app-boot",
 		"@deepseek-ai/dsh-cmdline": "link:/Users/tyler.liu/src/ai/deepseek-harness/packages/boot/cmdline",
+		"@deepseek-ai/dsh-home-paths": "link:/Users/tyler.liu/src/ai/deepseek-harness/packages/util/home-paths",
 		"@deepseek-ai/dsh-llm": "link:/Users/tyler.liu/src/ai/deepseek-harness/packages/llm/llm",
 		"@deepseek-ai/dsh-session": "link:/Users/tyler.liu/src/ai/deepseek-harness/packages/core/session",
 		"@deepseek-ai/dsh-subagent": "link:/Users/tyler.liu/src/ai/deepseek-harness/packages/subagent/subagent"

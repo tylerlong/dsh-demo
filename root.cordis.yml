@@ -1,0 +1,4 @@
+# Empty plugin list — the tree is composed purely from the dsh-base bundle
+# patches mounted by src/boot.ts. This file is the root include config for
+# the standalone `boot()` call.
+[]
