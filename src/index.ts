@@ -19,21 +19,21 @@
  * driving DSH from a script.
  */
 
-import { randomUUID } from 'node:crypto'
-import type { Context } from '@deepseek-ai/cordis'
-import type {} from '@deepseek-ai/cordis-plugin-loader'
-import type {} from '@deepseek-ai/dsh-agent-default-model'
-import { SessionId } from '@deepseek-ai/dsh-session'
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import type {} from '@deepseek-ai/dsh-cmdline'
-import type {} from '@deepseek-ai/dsh-workflow'
+import { randomUUID } from 'node:crypto';
+import type { Context } from '@deepseek-ai/cordis';
+import type {} from '@deepseek-ai/cordis-plugin-loader';
+import type {} from '@deepseek-ai/dsh-agent-default-model';
+import type {} from '@deepseek-ai/dsh-cmdline';
+import { createUserMessage } from '@deepseek-ai/dsh-llm';
+import type { SessionEvent } from '@deepseek-ai/dsh-session';
+import { SessionId } from '@deepseek-ai/dsh-session';
+import type {} from '@deepseek-ai/dsh-workflow';
 
 /** Stable Cordis plugin name. */
-export const name = 'dsh-demo-driver'
+export const name = 'dsh-demo-driver';
 
 /** Core services required before the one-shot run can start. */
-export const inject = ['agents', 'sessions']
+export const inject = ['agents', 'sessions'];
 
 /**
  * Plugin config (all optional). No `Config` schema is declared, so Cordis
@@ -41,14 +41,14 @@ export const inject = ['agents', 'sessions']
  */
 export interface Config {
   /** Directory b.txt/c.txt are written into (default: process.cwd()). */
-  outputDir?: string
+  outputDir?: string;
 }
 
-const PROVIDER = 'openrouter'
-const MODEL_PRIMARY = '~deepseek/deepseek-v4-flash-latest'
-const MODEL_A = 'openai/gpt-5.6-luna'
-const MODEL_B = '~deepseek/deepseek-v4-flash-latest'
-const MODEL_C = 'openai/gpt-5.6-luna'
+const PROVIDER = 'openrouter';
+const MODEL_PRIMARY = '~deepseek/deepseek-v4-flash-latest';
+const MODEL_A = 'openai/gpt-5.6-luna';
+const MODEL_B = '~deepseek/deepseek-v4-flash-latest';
+const MODEL_C = 'openai/gpt-5.6-luna';
 
 /**
  * The workflow script body (plain JS, top-level await allowed). It runs in a
@@ -89,104 +89,123 @@ const r = await agent(
 if (r === null) throw new Error('agent ' + branch + ' failed')
 
 return { number, odd, branch, file, value: r.value }
-`
+`;
 
 /** Aggregate the last assistant text from a session's events. */
 function lastAssistantText(events: readonly SessionEvent[]): string {
-  let started = false
-  let text = ''
+  let started = false;
+  let text = '';
   for (const event of events) {
     if (event.type === 'turn/start') {
-      started = true
-      continue
+      started = true;
+      continue;
     }
-    if (!started) continue
+    if (!started) continue;
     if (event.type === 'assistant/message') {
       const joined = event.data.message.content
         .filter((block) => block.type === 'text')
         .map((block) => block.text)
-        .join('')
-      if (joined !== '') text = joined
+        .join('');
+      if (joined !== '') text = joined;
     }
   }
-  return text
+  return text;
 }
 
 /** Drive the whole demo and return the process exit code. */
 async function run(ctx: Context, config: Config): Promise<number> {
-  await ctx.get('loader')?.await()
-  const agents = ctx.get('agents')
-  const sessions = ctx.get('sessions')
-  const engine = ctx.get('workflowEngine')
+  await ctx.get('loader')?.await();
+  const agents = ctx.get('agents');
+  const sessions = ctx.get('sessions');
+  const engine = ctx.get('workflowEngine');
   if (agents === undefined || sessions === undefined || engine === undefined) {
-    console.error('dsh-demo-driver: missing services (agents/sessions/workflowEngine)')
-    return 1
+    console.error('dsh-demo-driver: missing services (agents/sessions/workflowEngine)');
+    return 1;
   }
 
-  const cwd = config.outputDir ?? process.cwd()
+  const cwd = config.outputDir ?? process.cwd();
 
   // PRIMARY agent (~deepseek/deepseek-v4-flash-latest); every workflow child is its subagent.
   const { agent, dispose } = await agents.create({
     sessionId: SessionId(`session-${randomUUID()}`),
     meta: { cwd },
     agentOptions: { provider: PROVIDER, model: MODEL_PRIMARY },
-  })
+  });
   try {
-    await agent.whenIdle()
+    await agent.whenIdle();
 
     const run = engine.start({
       script: SCRIPT,
-      meta: { name: 'random-number-demo', description: 'primary -> A(random) -> B/C(compute+write)' },
+      meta: {
+        name: 'random-number-demo',
+        description: 'primary -> A(random) -> B/C(compute+write)',
+      },
       args: { cwd },
       parent: agent,
-    })
-    const result = await run.result
+    });
+    const result = await run.result;
     try {
       if (result.stopReason !== 'completed') {
-        console.error(`dsh-demo-driver: workflow ${result.stopReason}: ${result.error ?? ''}`)
-        return 1
+        console.error(`dsh-demo-driver: workflow ${result.stopReason}: ${result.error ?? ''}`);
+        return 1;
       }
-      const value = result.value as { number: number; odd: boolean; branch: string; file: string; value: number }
-      console.log(`[dsh-demo] random number = ${value.number} (${value.odd ? 'odd' : 'even'})`)
-      console.log(`[dsh-demo] agent ${value.branch} computed ${value.number} * ${value.odd ? 9 : 10} = ${value.value} -> ${value.file}`)
+      const value = result.value as {
+        number: number;
+        odd: boolean;
+        branch: string;
+        file: string;
+        value: number;
+      };
+      console.log(`[dsh-demo] random number = ${value.number} (${value.odd ? 'odd' : 'even'})`);
+      console.log(
+        `[dsh-demo] agent ${value.branch} computed ${value.number} * ${value.odd ? 9 : 10} = ${value.value} -> ${value.file}`,
+      );
 
       // PRIMARY agent receives the result and reports it ("primary agent gets the result").
       try {
-        agent.followup(createUserMessage({
-          content: [{
-            type: 'text',
-            text: `The workflow finished. Random number: ${value.number} (${value.odd ? 'odd' : 'even'}). Agent ${value.branch} computed ${value.value} and wrote it to ${value.file}. Confirm the file was written and summarize the run in one short message.`,
-          }],
-          source: { kind: 'user' },
-        }))
-        await agent.whenIdle()
-        await sessions.flush(agent.session)
-        const summary = lastAssistantText(agent.session.events)
-        if (summary !== '') console.log(`[dsh-demo] primary agent: ${summary}`)
+        agent.followup(
+          createUserMessage({
+            content: [
+              {
+                type: 'text',
+                text: `The workflow finished. Random number: ${value.number} (${value.odd ? 'odd' : 'even'}). Agent ${value.branch} computed ${value.value} and wrote it to ${value.file}. Confirm the file was written and summarize the run in one short message.`,
+              },
+            ],
+            source: { kind: 'user' },
+          }),
+        );
+        await agent.whenIdle();
+        await sessions.flush(agent.session);
+        const summary = lastAssistantText(agent.session.events);
+        if (summary !== '') console.log(`[dsh-demo] primary agent: ${summary}`);
       } catch (error) {
-        console.warn(`dsh-demo-driver: primary summary turn failed: ${error instanceof Error ? error.message : String(error)}`)
+        console.warn(
+          `dsh-demo-driver: primary summary turn failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
-      return 0
+      return 0;
     } finally {
       // Terminate the workflow worker thread so the process can exit.
-      await run.dispose()
+      await run.dispose();
     }
   } finally {
-    await dispose()
+    await dispose();
   }
 }
 
 /** Mount the one-shot driver. */
 export function apply(ctx: Context, config: Config | undefined): void {
-  const exit = ctx.get('appExit')
+  const exit = ctx.get('appExit');
   if (exit === undefined) {
-    throw new Error('dsh-demo-driver: the launcher must provide ctx.appExit before the tree mounts')
+    throw new Error(
+      'dsh-demo-driver: the launcher must provide ctx.appExit before the tree mounts',
+    );
   }
   void run(ctx, config ?? {}).then(
     (code) => exit(code),
     (error) => {
-      console.error(`dsh-demo-driver: ${error instanceof Error ? error.message : String(error)}`)
-      exit(1)
+      console.error(`dsh-demo-driver: ${error instanceof Error ? error.message : String(error)}`);
+      exit(1);
     },
-  )
+  );
 }
