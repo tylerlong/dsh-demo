@@ -6,7 +6,7 @@ tabs, exercising per-agent model routing and subagent orchestration.
 ## The workflow (exactly as specified)
 
 ```
-primary agent  (~deepseek/deepseek-v4-flash-latest, openrouter)
+primary agent  (deepseek/deepseek-v4-flash-0731, openrouter)
    │
    ├─ starts agent A (openai/gpt-5.6-luna, openrouter)
    │     → generates a random integer 1–100 (via a real random source)
@@ -14,7 +14,7 @@ primary agent  (~deepseek/deepseek-v4-flash-latest, openrouter)
    │
    ├─ deterministic branch on parity (driver logic, not an LLM decision)
    │
-   ├─ odd  → starts agent B (~deepseek/deepseek-v4-flash-latest)
+   ├─ odd  → starts agent B (deepseek/deepseek-v4-flash-0731)
    │          computes n × 9  → writes b.txt in the project folder
    │
    └─ even → starts agent C (openai/gpt-5.6-luna)
@@ -30,6 +30,7 @@ all subagents of the primary, each on its own OpenRouter model.
 | Path | Purpose |
 |---|---|
 | `src/index.ts` | The driver plugin (`@dsh-demo/driver`): creates the primary agent, orchestrates A/B/C via direct `subagents.start('spawn', ...)` calls, prints the result, exits 0/1. No workflow script string — the driver IS the orchestrator. |
+| `src/enhanced-flow.ts` | The generic enhanced-flow driver (`@dsh-demo/driver/enhanced-flow`): task + requirements in, primary does the task, then a fresh reviewer sub-agent reviews the final artifacts (read-only), the primary adjudicates accept/reject and fixes accepted items, looping until no feedback or all rejected. |
 | `package.json` | `link:` deps to the DSH monorepo packages (same cordis instance as the running CLI), `tsx` + `typescript` dev deps. |
 | `tsconfig.json` | Typecheck config (`pnpm typecheck`). |
 | `~/.dsh/profiles/dsh-demo/package.json` | Profile definition: bundles `@deepseek-ai/dsh-base` only (no headless runner, no web). |
@@ -44,7 +45,7 @@ all subagents of the primary, each on its own OpenRouter model.
   (openrouter route), tools (fs/bash/subagent), and the subagent service
   (`dsh-subagent` with the in-process `spawn` provider).
 - The driver mounts as a plugin, awaits the loader, creates the primary agent
-  with explicit `agentOptions: { provider: 'openrouter', model: '~deepseek/...' }`.
+  with explicit `agentOptions: { provider: 'openrouter', model: 'deepseek/...' }`.
 - Each child is a direct call to the subagent seam:
   `subagents.start('spawn', { label, prompt, parent, signal, agentOptions, outputSchema })`
   — the `spawn` provider is the same in-process driver the workflow engine
@@ -78,6 +79,37 @@ The driver does **not** blindly wait for the final result:
   run is given an `AbortSignal.timeout(...)` shared by both children; on
   expiry the active child is cancelled and the driver exits `1` with a clear
   message instead of hanging. No timeout by default.
+
+## Enhanced flow (`src/enhanced-flow.ts`)
+
+A task-agnostic "task + review loop" driver, mounted as
+`@dsh-demo/driver/enhanced-flow` (profile `dsh-demo-enhanced`):
+
+1. The **primary** agent (default `deepseek/deepseek-v4-flash-0731`) does the
+   task from the user-supplied `task` + `requirements` and writes artifacts to
+   `outputDir`.
+2. A **brand-new reviewer** sub-agent (default `openai/gpt-5.6-luna`, fresh
+   `spawn` — no access to the primary's context/logs of *how* it worked) gets
+   the same task + requirements + the final artifacts, and returns structured
+   feedback (`{"feedbacks": [{issue, suggestion}]}`). It is restricted to
+   read-only tools (`read`, `read_image`, `glob`, `grep`) and never redoes the
+   task.
+3. The **primary adjudicates** each feedback (accept → fix/adjust the
+   artifacts with write/edit; reject → keep as-is) and replies with one
+   machine-parseable line `{"accepted": [ids], "rejected": [ids]}`.
+4. If any feedback was accepted, the loop **restarts with a brand-new
+   reviewer** against the fixed artifacts; it stops when the reviewer has no
+   feedback or every feedback was rejected.
+
+Loop control, per-agent models, and context isolation are code-level concerns;
+the task + requirements are config. Config keys: `task`, `requirements`,
+`primaryModel?`, `reviewerModel?`, `outputDir?`, `maxRounds?` (default 5),
+`timeoutMs?`.
+
+```bash
+cd /Users/tyler.liu/src/ai/dsh-demo
+node --import tsx <dsh>/apps/cli/lib/bin.js --profile dsh-demo-enhanced
+```
 
 ## Run it
 

@@ -1,9 +1,9 @@
 /**
  * @dsh-demo/driver — DeepSeek Harness as a script.
  *
- * The PRIMARY agent (~deepseek/deepseek-v4-flash-latest) spawns agent A
+ * The PRIMARY agent (deepseek/deepseek-v4-flash-0731) spawns agent A
  * (openai/gpt-5.6-luna) to generate a random integer; the driver branches on
- * parity in plain TypeScript, then spawns agent B (~deepseek, n*9 -> b.txt) or
+ * parity in plain TypeScript, then spawns agent B (deepseek, n*9 -> b.txt) or
  * agent C (openai/gpt-5.6-luna, n*10 -> c.txt). The primary reports the result.
  *
  * Orchestration is DIRECT: every child is a `subagents.start('spawn', ...)`
@@ -32,9 +32,9 @@ export interface Config {
 }
 
 const PROVIDER = "openrouter";
-const PRIMARY = "~deepseek/deepseek-v4-flash-latest";
+const PRIMARY = "deepseek/deepseek-v4-flash-0731";
 const MODEL_A = "openai/gpt-5.6-luna";
-const MODEL_B = "~deepseek/deepseek-v4-flash-latest";
+const MODEL_B = "deepseek/deepseek-v4-flash-0731";
 const MODEL_C = "openai/gpt-5.6-luna";
 const SPAWN = "spawn";
 

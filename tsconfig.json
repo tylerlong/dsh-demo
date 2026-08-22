@@ -17,5 +17,5 @@
 		"resolveJsonModule": true,
 		"types": ["node"]
 	},
-	"include": ["src/index.ts"]
+	"include": ["src/index.ts", "src/enhanced-flow.ts"]
 }
