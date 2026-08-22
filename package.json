@@ -4,10 +4,16 @@
 	"private": true,
 	"type": "module",
 	"main": "src/index.ts",
+	"engines": {
+		"node": "^22.19.0 || >=24.0.0",
+		"pnpm": ">=11"
+	},
+	"packageManager": "pnpm@11.22.0",
 	"scripts": {
 		"demo": "node --import tsx /Users/tyler.liu/src/ai/deepseek-harness/apps/cli/lib/bin.js --profile dsh-demo",
 		"typecheck": "tsc --noEmit",
-		"lint": "npx @biomejs/biome check . --write"
+		"lint": "biome check . --write",
+		"format": "biome format . --write"
 	},
 	"dependencies": {
 		"@deepseek-ai/cordis": "link:/Users/tyler.liu/src/ai/deepseek-harness/vendor/cordis",
