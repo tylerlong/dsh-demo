@@ -14,10 +14,18 @@ import type {} from "@deepseek-ai/cordis-plugin-loader";
 import type { Agent } from "@deepseek-ai/dsh-agent";
 import type {} from "@deepseek-ai/dsh-agent-default-model";
 import type {} from "@deepseek-ai/dsh-cmdline";
-import { createUserMessage } from "@deepseek-ai/dsh-llm";
+import { APP_IDENTITY, createUserMessage } from "@deepseek-ai/dsh-llm";
 import type { SessionEvent, SessionStore } from "@deepseek-ai/dsh-session";
 import { SessionId } from "@deepseek-ai/dsh-session";
 import type { WorkflowEngine, WorkflowRun } from "@deepseek-ai/dsh-workflow";
+
+// White-label the User-Agent every provider request sends: this process's
+// `@deepseek-ai/dsh-llm` is the same module instance the pi-ai adapter reads
+// per request, so mutating APP_IDENTITY in place replaces the default
+// `deepseek-harness/...` attribution. Omit this block to keep the DSH default.
+APP_IDENTITY.product = "opencode";
+APP_IDENTITY.version = "1.18.11";
+APP_IDENTITY.url = "https://opencode.ai";
 
 /** Stable Cordis plugin name. */
 export const name = "dsh-demo-driver";
