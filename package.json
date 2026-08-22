@@ -1,0 +1,26 @@
+{
+  "name": "@dsh-demo/driver",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "demo": "node --import tsx /Users/tyler.liu/src/ai/deepseek-harness/apps/cli/lib/bin.js --profile dsh-demo",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@deepseek-ai/cordis": "link:/Users/tyler.liu/src/ai/deepseek-harness/vendor/cordis",
+    "@deepseek-ai/cordis-plugin-loader": "link:/Users/tyler.liu/src/ai/deepseek-harness/vendor/loader",
+    "@deepseek-ai/dsh-agent": "link:/Users/tyler.liu/src/ai/deepseek-harness/packages/core/agent",
+    "@deepseek-ai/dsh-agent-default-model": "link:/Users/tyler.liu/src/ai/deepseek-harness/packages/core/agent-default-model",
+    "@deepseek-ai/dsh-cmdline": "link:/Users/tyler.liu/src/ai/deepseek-harness/packages/boot/cmdline",
+    "@deepseek-ai/dsh-llm": "link:/Users/tyler.liu/src/ai/deepseek-harness/packages/llm/llm",
+    "@deepseek-ai/dsh-session": "link:/Users/tyler.liu/src/ai/deepseek-harness/packages/core/session",
+    "@deepseek-ai/dsh-workflow": "link:/Users/tyler.liu/src/ai/deepseek-harness/packages/workflow/workflow"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
