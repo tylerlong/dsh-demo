@@ -11,6 +11,7 @@
 	"scripts": {
 		"demo": "tsx src/index.ts",
 		"enhanced": "tsx src/enhanced-flow.ts",
+		"serve": "tsx src/serve.ts",
 		"typecheck": "tsc --noEmit",
 		"test": "vitest run",
 		"lint": "biome check . --write",
@@ -24,11 +25,13 @@
 		"@deepseek-ai/dsh-home-paths": "link:/Users/tyler.liu/src/ai/deepseek-harness/packages/util/home-paths",
 		"@deepseek-ai/dsh-llm": "link:/Users/tyler.liu/src/ai/deepseek-harness/packages/llm/llm",
 		"@deepseek-ai/dsh-session": "link:/Users/tyler.liu/src/ai/deepseek-harness/packages/core/session",
-		"@deepseek-ai/dsh-subagent": "link:/Users/tyler.liu/src/ai/deepseek-harness/packages/subagent/subagent"
+		"@deepseek-ai/dsh-subagent": "link:/Users/tyler.liu/src/ai/deepseek-harness/packages/subagent/subagent",
+		"ws": "^8.21.3"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.5.8",
 		"@types/node": "^26.2.0",
+		"@types/ws": "^8.18.1",
 		"tsx": "^4.23.12",
 		"typescript": "^7.0.2",
 		"vitest": "^4.1.8"

@@ -37,6 +37,7 @@ all subagents of the primary, each on its own model.
 |---|---|
 | `src/index.ts` | **Demo 1** — the script above: primary + A/B/C with per-agent `subagents.start('spawn', ...)` calls. `pnpm demo`. |
 | `src/enhanced-flow.ts` | **Demo 2** — generic "task + review loop". `pnpm enhanced`. |
+| `src/server.ts` + `src/serve.ts` | **dsh-compare** — an HTTP + WebSocket server bound to `127.0.0.1:4173` (override with `DSH_COMPARE_PORT`) serving a static comparison UI shell: a top section (task, primary model dropdown, Submit/Cancel, output) above two lanes (dropdown + output panel each). Model dropdowns populate at runtime from the harness's configured provider settings (`llm-pi-ai`). `pnpm serve`. |
 | `src/boot.ts` | Shared standalone boot: resolves the `@deepseek-ai/dsh-base` bundle, boots the tree via `boot()`, points bare-module resolution at the DSH monorepo's pnpm virtual store, and applies override patches from `dsh-demo.config.json`. |
 | `root.cordis.yml` | Empty plugin list — the tree is composed purely from the base bundle patches; it is the root include each script boots. |
 | `dsh-demo.config.json` | Optional location overrides (see below). Absent/empty → shared harness home defaults. |
