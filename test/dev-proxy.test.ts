@@ -113,6 +113,11 @@ beforeAll(async () => {
 		root: WEB_ROOT,
 		logLevel: "silent",
 		server: {
+			// Bind to IPv4 localhost explicitly: Vite's default `localhost`
+			// host resolves IPv6-first on GitHub Actions runners, which makes
+			// the dev origin unreachable at the 127.0.0.1 address this suite
+			// connects to (the same bind the dev command uses).
+			host: "127.0.0.1",
 			port: 0,
 			proxy: devProxy(backend.port),
 		},

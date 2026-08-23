@@ -46,6 +46,11 @@ export function devProxy(
 export default defineConfig({
 	plugins: [react(), tailwindcss()],
 	server: {
+		// Bind the dev server to IPv4 localhost explicitly: the default
+		// `localhost` host resolves IPv6-first on some machines (notably
+		// GitHub Actions runners), which makes the dev origin unreachable at
+		// the 127.0.0.1 address the backend and the dev-proxy test use.
+		host: "127.0.0.1",
 		proxy: devProxy(BACKEND_PORT),
 	},
 });
