@@ -128,11 +128,7 @@ async function readyForm(): Promise<void> {
 	);
 }
 
-/**
- * The request the form assembles from the defaults and the typed task. The
- * request carries the session to resume (parent #37); the session browser
- * that supplies a real session id lands in ticket #41, so it is empty here.
- */
+/** The request the form assembles from the defaults and the typed task. */
 function expectedRequest(task: string): RunRequest {
 	return {
 		task,
@@ -141,7 +137,7 @@ function expectedRequest(task: string): RunRequest {
 			left: MODELS.defaults.left,
 			right: MODELS.defaults.right,
 		},
-		sessionId: "",
+		sessionId: "/opt/beta-project",
 	};
 }
 

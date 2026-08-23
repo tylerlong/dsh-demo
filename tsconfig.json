@@ -28,6 +28,7 @@
 		"src/server.ts",
 		"src/model-list.ts",
 		"src/workspace-list.ts",
+		"src/workspace.ts",
 		"src/harness-adapters.ts",
 		"src/serve.ts",
 		"test/run-factory.test.ts",

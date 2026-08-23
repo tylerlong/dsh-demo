@@ -6,9 +6,10 @@
  * LLM call. The tests drive the fake exactly as the server (ticket #3) will
  * drive production injected startRun, so they pin the contract #3 builds on.
  *
- * New contract (parent ticket #37): a run carries the session to resume
- * (sessionId), ends with run/done as soon as both lanes settle, and never
- * emits run/summary.
+ * New contract (parent ticket #37/#40): a run carries a sessionId (the
+ * persisted session to resume), ends with run/done as soon as both lanes
+ * settle, never emits run/summary, and an empty session id fails
+ * immediately with both lanes erroring + run/done.
  */
 import { describe, expect, it } from "vitest";
 import { createScriptedRunFactory } from "../src/run-factory.ts";
@@ -20,8 +21,9 @@ const baseRequest = () => ({
 		left: "deepseek/deepseek-v4-flash-0731",
 		right: "openai/gpt-5.6-luna",
 	},
-	sessionId: "session-1",
+	sessionId: "session-seam-test",
 });
+
 
 /** Grab the latest run or fail the test; the factory always has one here. */
 function lastRun(factory: ReturnType<typeof createScriptedRunFactory>) {
@@ -89,10 +91,10 @@ describe("run-factory seam", () => {
 		expect(factory.runs[1]?.handle.id).toBe("1");
 	});
 
-	it("carries the session to resume in the request", () => {
+	it("carries the session id in the request", () => {
 		const factory = createScriptedRunFactory();
-		factory.startRun({ ...baseRequest(), sessionId: "session-9" }, () => {});
-		expect(factory.lastRun?.request.sessionId).toBe("session-9");
+		factory.startRun({ ...baseRequest(), sessionId: "session-other" }, () => {});
+		expect(factory.lastRun?.request.sessionId).toBe("session-other");
 	});
 
 	it("emits run/done as soon as both lanes settle and never a run/summary", () => {
@@ -129,18 +131,27 @@ describe("run-factory seam", () => {
 		]);
 	});
 
-	it("a submitted run with any session id starts cleanly (no folder validation)", () => {
+	it("an empty session id fails immediately: both lanes error and the run ends before any worker starts", () => {
 		const factory = createScriptedRunFactory();
 		const received: Array<{ type: string; laneId?: string; reason?: string }> =
 			[];
 		const handle = factory.startRun(
-			{ ...baseRequest(), sessionId: "session-any" },
+			{
+				...baseRequest(),
+				sessionId: "   ",
+			},
 			(event) => received.push(event),
 		);
 
-		// The run starts with just run/started; nothing fails before workers.
+		// The run still has a handle, but both lanes errored and run/done ended it.
 		expect(typeof handle.id).toBe("string");
-		expect(received.map((e) => e.type)).toEqual(["run/started"]);
-		expect(factory.lastRun?.request.sessionId).toBe("session-any");
+		const types = received.map((e) => e.type);
+		expect(types).toContain("lane/worker/error");
+		expect(types).toContain("run/done");
+		// No worker ever started: no lane/worker/started and no run/summary.
+		expect(types).not.toContain("lane/worker/started");
+		expect(types).not.toContain("run/summary");
+		const errors = received.filter((e) => e.type === "lane/worker/error");
+		expect(errors.length).toBe(2);
 	});
 });

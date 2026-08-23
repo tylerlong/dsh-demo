@@ -63,6 +63,7 @@ const WORKSPACES: WorkspaceOption[] = [
 /** The frontend source root the dev server serves (web/). */
 const WEB_ROOT = fileURLToPath(new URL("../web", import.meta.url));
 
+
 let backend: ServerHandle;
 let vite: ViteDevServer;
 let vitePort = 0;
@@ -205,7 +206,7 @@ function baseRequest(task: string): RunRequest {
 			left: "deepseek/deepseek-v4-flash-0731",
 			right: "openai/gpt-5.6-luna",
 		},
-		sessionId: "session-1",
+		sessionId: "session-dev-proxy",
 	};
 }
 

@@ -8,12 +8,6 @@
  * disabled until both lists have loaded, so the user never configures a run
  * against empty data.
  *
- * The run request carries the session to resume (parent ticket #37): the
- * shared protocol now has `sessionId` instead of `workspace`. The session
- * browser that supplies the selected session lands in ticket #41; until then
- * the form takes an optional `sessionId` (defaulting to empty) and keeps the
- * workspace dropdown, which #41 removes.
- *
  * The run lifecycle — wiring submit/cancel to the WebSocket and locking the
  * inputs while a run is active — is ticket #33. This form only renders and
  * loads, and exposes the three seams #33 builds on: an optional `onSubmit`
@@ -41,16 +35,9 @@ export interface RunConfigFormProps {
 	readonly loadModels?: () => Promise<ModelsResponse>;
 	/**
 	 * Load the workspace catalog. Defaults to the /api/workspaces fetch;
-	 * tests inject a fake. The workspace dropdown itself is removed by the
-	 * session browser (ticket #41); until then it still loads.
+	 * tests inject a fake.
 	 */
 	readonly loadWorkspaces?: () => Promise<readonly WorkspaceOption[]>;
-	/**
-	 * The session to resume (parent ticket #37): the run request carries this
-	 * session id instead of a workspace. The session browser (ticket #41)
-	 * supplies the selected session; until then it defaults to empty.
-	 */
-	readonly sessionId?: string;
 	/**
 	 * Lock the inputs (ticket #33 wires this while a run is active). While
 	 * locked, every input and Submit are disabled and Cancel is enabled.
@@ -95,7 +82,6 @@ function preselectWorkspace(workspaces: readonly WorkspaceOption[]): string {
 export function RunConfigForm({
 	loadModels = fetchModels,
 	loadWorkspaces = fetchWorkspaces,
-	sessionId = "",
 	locked = false,
 	onSubmit,
 	onCancel,
@@ -158,7 +144,11 @@ export function RunConfigForm({
 			task,
 			primaryModel,
 			laneModels: { left: laneModels.left, right: laneModels.right },
-			sessionId,
+			// The run continues the selected session; the workspace dropdown is
+			// the session picker placeholder until the session browser lands
+			// (ticket #41) — the production factory takes the workspace from the
+			// resumed session's header, never from the request.
+			sessionId: workspace,
 		});
 	};
 

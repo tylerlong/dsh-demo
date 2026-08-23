@@ -26,10 +26,11 @@ export interface RunRequest {
 	/** The model each lane worker runs on. */
 	laneModels: Record<LaneId, string>;
 	/**
-	 * The session to resume (the selected session from the read-only session
-	 * browser). A run continues that session — inheriting its saved context
-	 * and appending its new turns to it — instead of starting from a fresh
-	 * workspace (parent ticket #37).
+	 * The persisted session to resume: the run continues that session, loading
+	 * its saved context so the new turns append to the same session. The run's
+	 * workspace is the resumed session's cwd from its header, not a request
+	 * field. A session the harness cannot resume fails immediately: both lanes
+	 * error and the run ends before any worker starts.
 	 */
 	sessionId: string;
 }

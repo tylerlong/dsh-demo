@@ -189,14 +189,13 @@ describe("RunConfigForm", () => {
 		expect(controls().submit).toBeDisabled();
 	});
 
-	it("submits the assembled run request with the session to resume", async () => {
+	it("submits the assembled run request", async () => {
 		const user = userEvent.setup();
 		const onSubmit = vi.fn();
 		render(
 			<RunConfigForm
 				loadModels={async () => MODELS}
 				loadWorkspaces={async () => WORKSPACES}
-				sessionId="session-1"
 				onSubmit={onSubmit}
 			/>,
 		);
@@ -212,7 +211,7 @@ describe("RunConfigForm", () => {
 				left: MODELS.defaults.left,
 				right: MODELS.defaults.right,
 			},
-			sessionId: "session-1",
+			sessionId: "/opt/beta-project",
 		});
 	});
 

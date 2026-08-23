@@ -6,20 +6,24 @@
  *
  *   1. resolves the harness provider route for every requested model id from
  *      the same configured model list the dropdowns use (model-list.ts),
- *   2. creates the **orchestrator** (the primary agent) on the requested
- *      primary model (the run request carries the session to resume —
- *      request.sessionId, parent ticket #37 — whose resume wiring lands in
- *      ticket #40; until then the orchestrator is created on a fresh session),
+ *   2. **resumes** the requested session (`RunRequest.sessionId`) as the
+ *      **orchestrator** (the primary agent) on the requested primary model via
+ *      `ctx.agents.resume` — the session's saved context loads, so the run's
+ *      new turns append to that same session — and takes the run workspace
+ *      from the resumed session's cwd in its header (never from the request);
+ *      the header cwd must be an existing folder (realpath-canonicalized)
+ *      before any worker spawns — invalid → both lanes error + run/done — and
+ *      a session the harness cannot resume rejects the same way,
  *   3. spawns the two **workers** concurrently — one per lane, each on its
- *      lane's model — restricted to the read-only tool filter (read,
- *      read_image, glob, grep) so concurrent lanes never conflict over edits
- *      (ADR-0001),
+ *      lane's model — under the resumed primary agent, restricted to the
+ *      read-only tool filter (read, read_image, glob, grep) so concurrent
+ *      lanes never conflict over edits (ADR-0001),
  *   4. routes real session events to the owning lane (text deltas) and the
  *      top section (spawn notice), and emits run/done as soon as both lanes
  *      settle (each done or errored), and
  *   5. supports real cancellation: one Cancel aborts the shared
- *      AbortController, stops the orchestrator and both workers, and emits
- *      run/canceled.
+ *      AbortController, stops the resumed orchestrator and both workers, and
+ *      emits run/canceled.
  *
  * This is the seam's production wiring: src/server.ts + the browser UI build
  * on the RunEvent vocabulary from the shared protocol module
@@ -34,6 +38,7 @@ import type { SubagentResult, SubagentRun } from "@deepseek-ai/dsh-subagent";
 import type { LaneId, RunEvent } from "../shared/protocol.ts";
 import { convertLlmModels } from "./model-list.ts";
 import type { StartRun } from "./run-factory.ts";
+import { resolveWorkspace } from "./workspace.ts";
 
 /** The subagent provider that spawns in-process children (see the demos). */
 const SPAWN_PROVIDER = "spawn";
@@ -107,8 +112,7 @@ function watchSession(
  *
  * Each {@link StartRun} call emits run/started synchronously (so the tab locks
  * its inputs immediately), then drives the whole comparison in the
- * background: orchestrator creation (the run resumes the requested session
- * in ticket #40; until then a fresh session), concurrent
+ * background: orchestrator creation (workspace session cwd), concurrent
  * read-only workers, and teardown. The run ends with run/done as soon as
  * both lanes settle. The returned handle cancel() aborts the shared
  * controller, stops the orchestrator and both workers, and emits run/canceled.
@@ -210,12 +214,13 @@ export function createRunFactory(ctx: Context): StartRun {
 				);
 			}
 
-			// The orchestrator (primary agent) on the requested model. The run
-			// resumes the requested session (request.sessionId) — inheriting its
-			// saved context and appending its new turns to it — in ticket #40;
-			// until then the orchestrator is created on a fresh session id.
-			const handle = await ctx.agents.create({
-				sessionId: SessionId(`session-${runId}`),
+			// Resume the requested session as the orchestrator (primary agent) on
+			// the requested model: the session's saved context loads, so the run's
+			// new turns append to that same session (parent #40). A session the
+			// harness cannot resume rejects here, so the flow catch emits both lane
+			// errors + run/done with nothing started (see the flow below).
+			const handle = await ctx.agents.resume({
+				resumeSessionId: SessionId(request.sessionId),
 				agentOptions: {
 					provider: primaryProvider,
 					model: request.primaryModel,
@@ -224,6 +229,19 @@ export function createRunFactory(ctx: Context): StartRun {
 			});
 			orchestratorHandle = handle;
 			const orchestrator = handle.agent;
+
+			// The run's workspace is the resumed session's cwd from its header —
+			// never taken from the request. It must be an existing folder
+			// (realpath-canonicalized) before any worker spawns; invalid throws
+			// here, so the flow catch emits both lane errors + run/done with
+			// nothing started (the resumed agent is disposed in the flow's
+			// finally).
+			const workspace = resolveWorkspace(orchestrator.session.header.cwd ?? "");
+			if (workspace === undefined) {
+				throw new Error(
+					`invalid workspace: session ${request.sessionId} has no valid cwd`,
+				);
+			}
 
 			emit({
 				type: "orchestrator/delta",

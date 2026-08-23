@@ -205,7 +205,7 @@ describe("obsolete workspace check route", () => {
 		const res = await fetch(`${handle.url}/api/workspace/check`, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ path: "/opt/whatever" }),
+			body: JSON.stringify({ path: "/opt/alpha-project" }),
 		});
 		expect(res.status).toBe(404);
 	});
@@ -261,9 +261,10 @@ function baseRequest(task: string): RunRequest {
 			left: "deepseek/deepseek-v4-flash-0731",
 			right: "openai/gpt-5.6-luna",
 		},
-		sessionId: "session-1",
+		sessionId: "session-ws-test",
 	};
 }
+
 
 function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
@@ -322,7 +323,7 @@ describe("ws run lifecycle", () => {
 		}
 	});
 
-	it("submit carries the selected session id to the run factory", async () => {
+	it("an empty session id fails both lanes and ends the run before any worker starts", async () => {
 		const factory = createScriptedRunFactory();
 		const handle = await start({ port: 0, startRun: factory.startRun });
 		const ws = await connect(handle);
@@ -330,13 +331,29 @@ describe("ws run lifecycle", () => {
 		ws.on("message", (data) => received.push(parse<RunEvent>(data)));
 		try {
 			const request = baseRequest("haiku");
-			request.sessionId = "session-42";
+			request.sessionId = "";
 			sendJson(ws, submitMessage(request));
 			await waitFor(received, (e) => e.type === "run/started");
 
-			// The run continues the selected session: the factory receives the
-			// session id from the request (parent ticket #37).
-			expect(factory.lastRun?.request.sessionId).toBe("session-42");
+			const leftError = (await waitFor(
+				received,
+				(e) => e.type === "lane/worker/error" && e.laneId === "left",
+			)) as { reason?: string };
+			const rightError = (await waitFor(
+				received,
+				(e) => e.type === "lane/worker/error" && e.laneId === "right",
+			)) as { reason?: string };
+			const done = await waitFor(received, (e) => e.type === "run/done");
+
+			// Both lanes error and the run ends; the reason stays server-side.
+			expect(leftError.reason).toBeUndefined();
+			expect(rightError.reason).toBeUndefined();
+			expect(done).toEqual({
+				type: "run/done",
+				runId: factory.lastRun?.handle.id,
+			});
+			// The run never spawned a worker.
+			expect(factory.lastRun?.request.sessionId).toBe("");
 		} finally {
 			ws.close();
 		}

@@ -1,24 +1,28 @@
 /**
- * real-run-factory.test.ts — tests for the harness-backed run factory (#5).
+ * real-run-factory.test.ts — tests for the harness-backed run factory (#5, #40).
  *
- * The factory is a thin composition of harness primitives (agents.create,
+ * The factory is a thin composition of harness primitives (agents.resume,
  * subagents.start, session event watching, cancellation). These tests drive it
  * against a fake harness context — a fake llm registry, agent factory, and
  * subagent provider — so no real model call or harness boot is involved. They
- * pin the orchestration shape (orchestrator on the primary model, two
- * read-only workers on the lane models), the event translation (session text
- * deltas → lane/worker/delta, completion → lane/worker/done, run/done once
- * both lanes settle, cancel → run/canceled), and the read-only tool filter.
- * The run request carries the session to resume (parent #37); the resume
- * wiring itself lands in ticket #40.
+ * pin the orchestration shape (the requested session resumed on the primary
+ * model, its saved context loaded so new turns append to that same session,
+ * the run workspace taken from the resumed session's header cwd, two read-only
+ * workers on the lane models), the event translation (session text deltas →
+ * lane/worker/delta, completion → lane/worker/done, run/done once both lanes
+ * settle, cancel → run/canceled), and the read-only tool filter.
  */
 
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Context } from "@deepseek-ai/cordis";
 import type { AgentHandle } from "@deepseek-ai/dsh-agent";
 import type { SubagentResult, SubagentRun } from "@deepseek-ai/dsh-subagent";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRunFactory, WORKER_TOOLS } from "../src/real-run-factory.ts";
 import type { RunEvent, RunRequest, StartRun } from "../src/run-factory.ts";
+import { resolveWorkspace } from "../src/workspace.ts";
 
 const MODELS = [
 	{
@@ -29,7 +33,21 @@ const MODELS = [
 	{ provider: "openrouter", id: "openai/gpt-5.6-luna", name: "GPT 5.6 Luna" },
 ];
 
-/** Build the default request: the run resumes the selected session (parent #37). */
+/** A workspace folder the run agents act on; a real dir, refreshed per test. */
+let WORKSPACE = "";
+beforeEach(() => {
+	WORKSPACE = mkdtempSync(join(tmpdir(), "dsh-ws-"));
+});
+afterEach(() => {
+	if (WORKSPACE !== "") {
+		rmSync(WORKSPACE, { recursive: true, force: true });
+	}
+});
+
+/** The session id every run resumes in these tests (the seam carries it). */
+const SESSION_ID = "session-resume-me";
+
+/** Build the default request against the resumed session. */
 function baseRequest(overrides: Partial<RunRequest> = {}): RunRequest {
 	return {
 		task: "Compare the sea and the sky",
@@ -38,7 +56,7 @@ function baseRequest(overrides: Partial<RunRequest> = {}): RunRequest {
 			left: "deepseek/deepseek-v4-flash-0731",
 			right: "openai/gpt-5.6-luna",
 		},
-		sessionId: "session-1",
+		sessionId: SESSION_ID,
 		...overrides,
 	};
 }
@@ -65,7 +83,7 @@ interface SpawnedRun {
 	readonly signal: AbortSignal;
 }
 
-interface CreatedAgent {
+interface ResumedAgent {
 	readonly handle: AgentHandle;
 	readonly opts: Record<string, unknown>;
 }
@@ -73,15 +91,20 @@ interface CreatedAgent {
 interface FakeHarness {
 	ctx: Context;
 	models: typeof MODELS;
-	created: CreatedAgent[];
+	resumed: ResumedAgent[];
 	spawned: SpawnedRun[];
 	sessionListeners: Array<(session: { id: string }, event: unknown) => void>;
 	orchestratorCalls: { whenIdle: number; followup: number; cancel: number };
+	/** The cwd the fake's resumed session header carried (the run workspace source). */
+	headerCwd: string | undefined;
 }
 
 /** Build a fake harness context the factory can drive. */
-function makeHarness(models: typeof MODELS = MODELS): FakeHarness {
-	const created: CreatedAgent[] = [];
+function makeHarness(
+	models: typeof MODELS = MODELS,
+	options: { headerCwd?: string; resumeError?: unknown } = {},
+): FakeHarness {
+	const resumed: ResumedAgent[] = [];
 	const spawned: SpawnedRun[] = [];
 	const sessionListeners: FakeHarness["sessionListeners"] = [];
 	const orchestratorCalls = { whenIdle: 0, followup: 0, cancel: 0 };
@@ -93,8 +116,17 @@ function makeHarness(models: typeof MODELS = MODELS): FakeHarness {
 			listModels: () => Promise.resolve(models),
 		},
 		agents: {
-			create: async (opts: Record<string, unknown>) => {
-				const session = { id: "session-orchestrator", events: [] };
+			resume: async (opts: Record<string, unknown>) => {
+				if (options.resumeError !== undefined) {
+					throw options.resumeError;
+				}
+				// The resumed session's header carries the session cwd; the
+				// factory must take the run workspace from it, not the request.
+				const session = {
+					id: opts.resumeSessionId,
+					header: { cwd: options.headerCwd },
+					events: [],
+				};
 				const agent = {
 					id: session.id,
 					options: { provider: "openrouter" },
@@ -115,7 +147,7 @@ function makeHarness(models: typeof MODELS = MODELS): FakeHarness {
 					agent: agent as never,
 					dispose: vi.fn().mockResolvedValue(undefined),
 				};
-				created.push({ handle, opts });
+				resumed.push({ handle, opts });
 				return handle;
 			},
 		},
@@ -146,10 +178,11 @@ function makeHarness(models: typeof MODELS = MODELS): FakeHarness {
 	return {
 		ctx: context as unknown as Context,
 		models,
-		created,
+		resumed,
 		spawned,
 		sessionListeners,
 		orchestratorCalls,
+		headerCwd: options.headerCwd,
 	};
 }
 
@@ -179,22 +212,32 @@ function startRun(
 }
 
 describe("real run factory", () => {
-	it("creates the orchestrator on the primary model and spawns two concurrent read-only workers", async () => {
-		const harness = makeHarness();
+	it("resumes the requested session on the primary model and spawns two concurrent read-only workers", async () => {
+		const harness = makeHarness(undefined, { headerCwd: WORKSPACE });
 		const { events } = startRun(harness);
 		expect(events[0]).toEqual({
 			type: "run/started",
 			runId: expect.any(String),
 		});
 
-		await waitUntil(() => harness.created.length === 1);
+		await waitUntil(() => harness.resumed.length === 1);
 		await waitUntil(() => harness.spawned.length === 2);
 
-		const createOpts = harness.created[0]?.opts as {
+		const resumeOpts = harness.resumed[0]?.opts as {
+			resumeSessionId: string;
 			agentOptions: { provider: string; model: string };
 		};
-		expect(createOpts.agentOptions.provider).toBe("openrouter");
-		expect(createOpts.agentOptions.model).toBe(baseRequest().primaryModel);
+		// The run resumes the requested session (its saved context loads, so
+		// new turns append to that same session) on the primary model.
+		expect(resumeOpts.resumeSessionId).toBe(SESSION_ID);
+		expect(resumeOpts.agentOptions.provider).toBe("openrouter");
+		expect(resumeOpts.agentOptions.model).toBe(baseRequest().primaryModel);
+		// The run workspace is the resumed session's header cwd (the request
+		// carries no workspace field): the fake's header cwd is a valid folder,
+		// so the run proceeds; the derivation is pinned behaviorally by the
+		// invalid-header-cwd failure test below.
+		expect(harness.headerCwd).toBe(WORKSPACE);
+		expect(resolveWorkspace(WORKSPACE)).toBe(realpathSync(WORKSPACE));
 
 		const calls = harness.spawned;
 		const toolFilters = calls.map(
@@ -216,8 +259,65 @@ describe("real run factory", () => {
 		expect(events.some((e) => e.type === "orchestrator/delta")).toBe(true);
 	});
 
+	it("rejects an empty or whitespace-only workspace (no implicit folder)", async () => {
+		// The resolver must not silently fall back to the server working
+		// directory (parent #9: an empty workspace is invalid).
+		expect(resolveWorkspace("")).toBeUndefined();
+		expect(resolveWorkspace("   ")).toBeUndefined();
+	});
+
+	it("a resumed session whose header has no valid cwd fails both lanes before any worker spawns", async () => {
+		// The run's workspace is the resumed session's cwd from its header; a
+		// session whose folder is gone (or never had one) must fail fast before
+		// any worker spawns, exactly as an invalid workspace did (parent #9/#40).
+		const harness = makeHarness(undefined, {
+			headerCwd: join(tmpdir(), "definitely-not-a-folder-xyz"),
+		});
+		const { events } = startRun(harness);
+
+		await waitUntil(() => events.some((e) => e.type === "run/done"));
+
+		const errors = events.filter((e) => e.type === "lane/worker/error");
+		expect(errors.length).toBe(2);
+		expect(harness.resumed.length).toBe(1);
+		expect(harness.spawned.length).toBe(0);
+		expect(events.some((e) => e.type === "lane/worker/started")).toBe(false);
+		expect(
+			events.some((e) => (e as { type: string }).type === "run/summary"),
+		).toBe(false);
+		expect(events.at(-1)).toEqual({
+			type: "run/done",
+			runId: expect.any(String),
+		});
+	});
+
+	it("an unresumable session id fails both lanes and ends the run before any worker spawns", async () => {
+		// The production factory resumes the requested session; a session the
+		// harness cannot load rejects, so both lanes error and the run ends
+		// with nothing started (no orchestrator, no workers, no summary).
+		const harness = makeHarness(undefined, {
+			resumeError: new Error("session not found"),
+		});
+		const { events } = startRun(harness);
+
+		await waitUntil(() => events.some((e) => e.type === "run/done"));
+
+		const errors = events.filter((e) => e.type === "lane/worker/error");
+		expect(errors.length).toBe(2);
+		expect(harness.resumed.length).toBe(0);
+		expect(harness.spawned.length).toBe(0);
+		expect(events.some((e) => e.type === "lane/worker/started")).toBe(false);
+		expect(
+			events.some((e) => (e as { type: string }).type === "run/summary"),
+		).toBe(false);
+		expect(events.at(-1)).toEqual({
+			type: "run/done",
+			runId: expect.any(String),
+		});
+	});
+
 	it("routes worker session text deltas to the owning lane", async () => {
-		const harness = makeHarness();
+		const harness = makeHarness(undefined, { headerCwd: WORKSPACE });
 		const { events } = startRun(harness);
 		await waitUntil(() => harness.spawned.length === 2);
 
@@ -265,7 +365,7 @@ describe("real run factory", () => {
 	});
 
 	it("emits lane/worker/done for both and run/done (no run/summary) when both workers complete", async () => {
-		const harness = makeHarness();
+		const harness = makeHarness(undefined, { headerCwd: WORKSPACE });
 		const { events } = startRun(harness);
 		await waitUntil(() => harness.spawned.length === 2);
 
@@ -304,7 +404,7 @@ describe("real run factory", () => {
 	});
 
 	it("a failed worker errors its own lane without killing the other lane or the run", async () => {
-		const harness = makeHarness();
+		const harness = makeHarness(undefined, { headerCwd: WORKSPACE });
 		const { events } = startRun(harness);
 		await waitUntil(() => harness.spawned.length === 2);
 
@@ -331,17 +431,17 @@ describe("real run factory", () => {
 		});
 	});
 
-	it("cancel aborts the orchestrator and both workers and emits run/canceled", async () => {
-		const harness = makeHarness();
+	it("cancel aborts the resumed orchestrator and both workers and emits run/canceled", async () => {
+		const harness = makeHarness(undefined, { headerCwd: WORKSPACE });
 		const { events, handle } = startRun(harness);
-		await waitUntil(() => harness.created.length === 1);
+		await waitUntil(() => harness.resumed.length === 1);
 		await waitUntil(() => harness.spawned.length === 2);
 
 		handle.cancel();
 
 		await waitUntil(() => events.some((e) => e.type === "run/canceled"));
 
-		const orchestrator = harness.created[0]?.handle.agent as unknown as {
+		const orchestrator = harness.resumed[0]?.handle.agent as unknown as {
 			cancel: ReturnType<typeof vi.fn>;
 		};
 		expect(orchestrator.cancel).toHaveBeenCalledWith({ kind: "user" });
@@ -355,7 +455,9 @@ describe("real run factory", () => {
 		// Only the left lane model is configured; the right lane id is
 		// unresolvable. The right lane must error on its own while the left
 		// lane still runs and the run reaches done (parent story 20).
-		const harness = makeHarness([MODELS[0] as (typeof MODELS)[number]]);
+		const harness = makeHarness([MODELS[0] as (typeof MODELS)[number]], {
+			headerCwd: WORKSPACE,
+		});
 		const request: RunRequest = baseRequest({
 			laneModels: {
 				left: "deepseek/deepseek-v4-flash-0731",
@@ -402,27 +504,5 @@ describe("real run factory", () => {
 		const errors = events.filter((e) => e.type === "lane/worker/error");
 		expect(errors.length).toBe(2);
 		expect(events.some((e) => e.type === "run/started")).toBe(true);
-	});
-
-	it("a run with any session id starts and reaches done (no folder validation)", async () => {
-		// The workspace contract is gone: the request carries the session to
-		// resume (parent #37), and the run starts regardless of the id. The
-		// resume wiring itself (ctx.agents.resume) lands in ticket #40.
-		const harness = makeHarness();
-		const { events } = startRun(
-			harness,
-			baseRequest({ sessionId: "session-7" }),
-		);
-		await waitUntil(() => harness.created.length === 1);
-
-		harness.spawned[0]?.settle({ output: [], stopReason: "completed" });
-		harness.spawned[1]?.settle({ output: [], stopReason: "completed" });
-		await waitUntil(() => events.some((e) => e.type === "run/done"));
-
-		expect(events.some((e) => e.type === "run/started")).toBe(true);
-		expect(events.at(-1)).toEqual({
-			type: "run/done",
-			runId: expect.any(String),
-		});
 	});
 });

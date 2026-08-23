@@ -12,9 +12,10 @@
  * stays the single run-factory seam.
  *
  * The scripted fake factory here mirrors the run final contract: a run
- * carries a **sessionId** (the session to resume, parent ticket #37), ends
- * with run/done as soon as both lanes settle (each done or errored), and
- * never emits run/summary.
+ * carries a **sessionId** (the persisted session to resume), ends with
+ * run/done as soon as both lanes settle (each done or errored), never
+ * emits run/summary, and rejects a run whose session id is empty (a session
+ * the harness could never resume) with both lanes erroring and run/done.
  */
 import type { LaneId, RunEvent, RunRequest } from "../shared/protocol.ts";
 
@@ -77,13 +78,21 @@ export interface ScriptedRunFactory {
 	readonly lastRun: ScriptedRun | undefined;
 }
 
+/** Whether a session id could name a resumable session (empty cannot). */
+function isValidSessionId(id: string): boolean {
+	return id.trim() !== "";
+}
+
 /**
  * Build a scripted fake run factory.
  *
  * Each startRun call:
  *   1. records the request and the given onEvent sink,
  *   2. produces a run handle (stable incremental id; cancel marks it canceled),
- *   3. emits the run initial run/started event,
+ *   3. emits the run initial run/started event; a run whose session id is
+ *      empty (a session the harness could never resume) then fails
+ *      immediately: both lanes error and the run ends (run/done) before
+ *      any worker starts.
  *   4. re-emits lane events and, once both lanes settle (each done or
  *      errored), emits a single run/done. run/summary is never emitted.
  *
@@ -128,6 +137,20 @@ export function createScriptedRunFactory(): ScriptedRunFactory {
 		};
 		runs.push(run);
 		emit({ type: "run/started", runId: id });
+		if (!isValidSessionId(request.sessionId)) {
+			// Reject the run before any worker starts: both lanes error, then
+			// the auto-settle logic above emits run/done.
+			emit({
+				type: "lane/worker/error",
+				laneId: "left",
+				reason: `invalid session: ${request.sessionId}`,
+			});
+			emit({
+				type: "lane/worker/error",
+				laneId: "right",
+				reason: `invalid session: ${request.sessionId}`,
+			});
+		}
 		return run.handle;
 	};
 	return {
