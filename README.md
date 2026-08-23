@@ -15,22 +15,31 @@ A local web app that runs one submitted task on two AI models concurrently and s
 
 ```sh
 pnpm install      # once — installs @deepseek-ai/* against the DSH monorepo
-pnpm serve        # boots the harness and serves the UI
+pnpm serve        # builds the frontend, then boots the harness and serves the UI
 ```
 
 The server binds `127.0.0.1:4173` by default (override with `HARNESS_WORKFLOW_PORT`) and prints its URL — open it in a browser.
 
-`pnpm serve` boots the **shared harness** (see `src/boot.ts`): it reads the shared harness home (`~/.dsh/settings.yaml`, `~/.dsh/.credentials.yaml`, `~/.dsh/sessions`) and resolves every `@deepseek-ai/*` plugin from the DSH monorepo's pnpm virtual store, so the product shares settings, the session store, and the workspace catalog with DSH web (see ADR-0003).
+`pnpm serve` builds the React frontend (`vite build web`, output `web/dist`) and then boots the **shared harness** (see `src/boot.ts`): it reads the shared harness home (`~/.dsh/settings.yaml`, `~/.dsh/.credentials.yaml`, `~/.dsh/sessions`) and resolves every `@deepseek-ai/*` plugin from the DSH monorepo's pnpm virtual store, so the product shares settings, the session store, and the workspace catalog with DSH web (see ADR-0003).
+
+## Develop
+
+```sh
+pnpm dev          # runs the backend and the Vite dev server together
+```
+
+`pnpm dev` starts the backend and the Vite dev server concurrently. The dev server proxies the API routes (`/api/*`) and the WebSocket endpoint to the backend, so the browser talks to one origin and gets hot reload. The dev proxy honors the same `HARNESS_WORKFLOW_PORT` override the backend reads.
 
 ## Project layout
 
 | Path | Purpose |
 |---|---|
-| `src/server.ts` + `src/serve.ts` | **harness-workflow** — an HTTP + WebSocket server serving a static comparison UI from `public/`: a top section (task, primary model dropdown, Submit/Cancel, output) above two lanes (dropdown + output panel each). Model dropdowns populate at runtime from the harness's configured provider settings (`llm-pi-ai`); the workspace dropdown from the shared catalog. `pnpm serve`. |
+| `src/server.ts` + `src/serve.ts` | **harness-workflow** — an HTTP + WebSocket server serving the built React frontend (`web/dist`) as a generic static file server, plus the `/api/models` and `/api/workspaces` endpoints. Model dropdowns populate at runtime from the harness's configured provider settings (`llm-pi-ai`); the workspace dropdown from the shared catalog. `pnpm serve`. |
 | `src/boot.ts` | Shared product boot: resolves the `@deepseek-ai/dsh-base` bundle, boots the tree via `boot()` with the `harness-workflow` identity, points bare-module resolution at the DSH monorepo's pnpm virtual store, and mounts the shared storage stack. |
 | `src/run-factory.ts` / `src/real-run-factory.ts` | The single run-factory seam: tests inject a scripted fake; `serve.ts` wires the harness-backed factory. |
-| `src/model-list.ts`, `src/workspace-list.ts` | Adapters from the harness's llm registry / shared workspace registry to the UI dropdown rows. |
-| `public/` | Static UI assets (the document, stylesheet, and browser script) served from disk per request. |
+| `src/model-list.ts`, `src/workspace-list.ts`, `src/harness-adapters.ts`, `src/workspace.ts` | Adapters from the harness's llm registry / shared workspace registry to the UI dropdown rows, the typed context wiring, and workspace resolution. |
+| `shared/protocol.ts` | The one shared WebSocket contract (run request shape, run event union, lane identity, WS path constant), imported by both the server and the client so the contract cannot drift. |
+| `web/` | The TypeScript + Vite + React single-page application: the app shell, the run configuration form, model and workspace selectors, the lane component, and the `useRun` lifecycle hook. Styled with Tailwind. |
 | `root.cordis.yml` | Empty plugin list — the tree is composed purely from the base bundle patches. |
 | `storage.cordis.patch.yml` | The overlay that mounts the shared storage stack for the workspace catalog. |
 | `examples/` | Archived pre-product DSH-harness demo scripts — see [`examples/README.md`](examples/README.md). |
@@ -38,4 +47,4 @@ The server binds `127.0.0.1:4173` by default (override with `HARNESS_WORKFLOW_PO
 ## Docs
 
 - `CONTEXT.md` — the product's domain vocabulary.
-- `docs/adr/` — recorded decisions (ADR-0001 transport & run model, ADR-0002 workspace as the orchestrator's session cwd, ADR-0003 shared workspace catalog, ADR-0004 the codebase simplification).
+- `docs/adr/` — recorded decisions (ADR-0001 transport & run model, ADR-0002 workspace as the orchestrator's session cwd, ADR-0003 shared workspace catalog, ADR-0004 the codebase simplification, ADR-0005 the frontend rewrite).

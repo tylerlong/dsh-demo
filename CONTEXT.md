@@ -4,6 +4,8 @@ A local web app that runs one submitted task on two AI models concurrently, in s
 
 The `examples/` archive holds pre-product DSH-harness experiments — frozen reference snippets, each with its own boot copy — not part of `harness-workflow`.
 
+The product UI is a TypeScript + React single-page application (built with Vite, styled with Tailwind; see ADR-0005).
+
 ## Language
 
 **run**:
