@@ -49,7 +49,7 @@ export function loadModelsFromContext(
 	return () =>
 		convertLlmModels(llm).catch((error) => {
 			console.error(
-				`dsh-compare: failed to read the configured model list: ${error instanceof Error ? error.message : error}`,
+				`harness-workflow: failed to read the configured model list: ${error instanceof Error ? error.message : error}`,
 			);
 			return [];
 		});
@@ -69,7 +69,7 @@ export function loadWorkspacesFromContext(
 	return () =>
 		convertWorkspaceList(registry, sessions).catch((error) => {
 			console.error(
-				`dsh-compare: failed to read the shared workspace list: ${error instanceof Error ? error.message : error}`,
+				`harness-workflow: failed to read the shared workspace list: ${error instanceof Error ? error.message : error}`,
 			);
 			return [];
 		});
