@@ -18,6 +18,11 @@ import { isAbsolute, resolve } from "node:path";
  * server working directory; the result is realpath-canonicalized.
  */
 export function resolveWorkspace(path: string): string | undefined {
+	// An empty workspace must fail (no implicit folder), not silently resolve
+	// to the server working directory.
+	if (path.trim() === "") {
+		return undefined;
+	}
 	try {
 		const absolute = isAbsolute(path) ? path : resolve(process.cwd(), path);
 		const canonical = realpathSync(absolute);
