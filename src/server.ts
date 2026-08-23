@@ -16,9 +16,15 @@
  * embed the seam: tests inject `startServer` with a fixed loadModels.
  */
 import { createServer, type Server } from "node:http";
-import { WebSocketServer } from "ws";
+import WebSocket, { type RawData, WebSocketServer } from "ws";
 import type { ModelOption } from "./model-list.ts";
 import { resolveDefaults } from "./model-list.ts";
+import type {
+	RunEvent,
+	RunHandle,
+	RunRequest,
+	StartRun,
+} from "./run-factory.ts";
 
 /** Re-export the dropdown option shape the /api/models endpoint serves. */
 export type { ModelOption } from "./model-list.ts";
@@ -43,6 +49,14 @@ export interface ServerOptions {
 	readonly loadModels: () =>
 		| Promise<readonly ModelOption[]>
 		| readonly ModelOption[];
+	/**
+	 * Inject the run factory (ticket #4): the server's only dependency on
+	 * orchestration. Tests inject the scripted fake (run-factory.ts); the
+	 * harness-backed factory is wired in ticket #5. While absent, a submit is
+	 * logged and ignored — the browser only enters its running state once the
+	 * factory confirms a run, so nothing hangs in the interim.
+	 */
+	readonly startRun?: StartRun;
 }
 
 /** A running dsh-compare server. */
@@ -82,6 +96,10 @@ function pageHtml(): string {
   #cancel { background: #4b5563; }
   .output { margin-top: 12px; min-height: 90px; border: 1px dashed #dfe2e6; border-radius: 6px; padding: 10px; white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 0.85rem; background: #fbfcfe; }
   .status { font-size: 0.75rem; color: #6b7280; }
+  .chip { display: inline-block; padding: 2px 8px; border-radius: 999px; }
+  .chip.running { background: #dbeafe; color: #1d4ed8; }
+  .chip.done { background: #dcfce7; color: #15803d; }
+  .chip.error { background: #fee2e2; color: #b91c1c; }
   #lanes { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
   .lane h2 { font-size: 1.05rem; margin: 0 0 8px; }
   @media (max-width: 760px) { #lanes { grid-template-columns: 1fr; } }
@@ -133,6 +151,15 @@ function pageHtml(): string {
 <script>
 (function () {
   "use strict";
+  var LANES = ["left", "right"];
+  var state = { running: false, runElapsed: 0 };
+  var laneTimers = { left: null, right: null };
+  var laneSeconds = { left: 0, right: 0 };
+  var runTimer = null;
+  var ws = null;
+
+  function el(id) { return document.getElementById(id); }
+
   // Populate the three model dropdowns from the harness-configured list.
   async function populateModelLists() {
     var res = await fetch("/api/models");
@@ -144,7 +171,7 @@ function pageHtml(): string {
     ];
     slots.forEach(function (slot) {
       var id = slot[0], def = slot[1];
-      var select = document.getElementById(id + "-model");
+      var select = el(id + "-model");
       data.models.forEach(function (model) {
         var option = document.createElement("option");
         option.value = model.id;
@@ -155,13 +182,136 @@ function pageHtml(): string {
     });
   }
 
-  // Open the run's WebSocket. Ticket #4 wires submit/cancel/streaming here.
+  // ---- per-lane status chips and elapsed timers ----
+  function setLaneChip(lane, text, cls) {
+    var chip = el(lane + "-status");
+    chip.textContent = text;
+    chip.className = "status chip";
+    if (cls) chip.className += " " + cls;
+  }
+  function clearLane(lane) {
+    stopLaneTimer(lane);
+    laneSeconds[lane] = 0;
+    el(lane + "-output").textContent = "";
+    setLaneChip(lane, "", "");
+  }
+  function startLaneTimer(lane) {
+    clearLane(lane);
+    setLaneChip(lane, "running · 0s", "running");
+    laneTimers[lane] = setInterval(function () {
+      laneSeconds[lane] += 1;
+      setLaneChip(lane, "running · " + laneSeconds[lane] + "s", "running");
+    }, 1000);
+  }
+  function stopLaneTimer(lane) {
+    if (laneTimers[lane]) { clearInterval(laneTimers[lane]); laneTimers[lane] = null; }
+  }
+  function finishLane(lane, status, cls) {
+    var seconds = laneSeconds[lane] || 0;
+    stopLaneTimer(lane);
+    setLaneChip(lane, status + " · " + seconds + "s", cls);
+  }
+
+  // ---- run-level state: lock the inputs, drive a run-level timer ----
+  function showRunStatus(text) { el("primary-status").textContent = text; }
+  function setInputsLocked(locked) {
+    ["task", "primary-model", "lane-left-model", "lane-right-model", "submit"].forEach(function (id) {
+      el(id).disabled = locked;
+    });
+    el("cancel").disabled = !locked;
+  }
+  function startRun() {
+    state.running = true;
+    state.runElapsed = 0;
+    el("primary-output").textContent = "";
+    LANES.forEach(clearLane);
+    setInputsLocked(true);
+    showRunStatus("running · 0s");
+    runTimer = setInterval(function () {
+      state.runElapsed += 1;
+      showRunStatus("running · " + state.runElapsed + "s");
+    }, 1000);
+  }
+  function endRun(status) {
+    state.running = false;
+    if (runTimer) { clearInterval(runTimer); runTimer = null; }
+    LANES.forEach(stopLaneTimer);
+    setInputsLocked(false);
+    showRunStatus(status + " · " + state.runElapsed + "s");
+  }
+  function appendText(target, text) { if (text) target.textContent += text; }
+
+  // ---- route run events: lane events to their panel, orchestrator to top ----
+  function handleEvent(msg) {
+    switch (msg.type) {
+      case "run/started":
+        startRun();
+        break;
+      case "run/done":
+        // A clear completion signal: any lane still running is done.
+        LANES.forEach(function (lane) {
+          if (el(lane + "-status").textContent.indexOf("running") === 0) {
+            finishLane(lane, "done", "done");
+          }
+        });
+        endRun("done");
+        break;
+      case "run/canceled":
+        endRun("canceled");
+        break;
+      case "run/summary":
+        appendText(el("primary-output"), "\n" + msg.summary);
+        break;
+      case "orchestrator/delta":
+        appendText(el("primary-output"), msg.text);
+        break;
+      case "lane/worker/started":
+        startLaneTimer(msg.laneId);
+        break;
+      case "lane/worker/delta":
+        appendText(el(msg.laneId + "-output"), msg.text);
+        break;
+      case "lane/worker/done":
+        finishLane(msg.laneId, "done", "done");
+        break;
+      case "lane/worker/error":
+        // The reason is logged server-side; the lane just shows its error chip.
+        finishLane(msg.laneId, "error", "error");
+        break;
+    }
+  }
+
+  // ---- the run WebSocket: submit and cancel ----
   function openSocket() {
     var proto = location.protocol === "https:" ? "wss://" : "ws://";
-    var ws = new WebSocket(proto + location.host + "/ws");
-    ws.onopen = function () { document.getElementById("conn-status").textContent = "connected"; };
-    ws.onclose = function () { document.getElementById("conn-status").textContent = "disconnected"; };
-    ws.onerror = function () { document.getElementById("conn-status").textContent = "error"; };
+    ws = new WebSocket(proto + location.host + "/ws");
+    ws.onopen = function () { el("conn-status").textContent = "connected"; };
+    ws.onclose = function () { el("conn-status").textContent = "disconnected"; };
+    ws.onerror = function () { el("conn-status").textContent = "error"; };
+    ws.onmessage = function (e) {
+      try { handleEvent(JSON.parse(e.data)); } catch (_) { /* ignore malformed */ }
+    };
+
+    el("submit").addEventListener("click", function () {
+      if (state.running || !ws || ws.readyState !== 1) return;
+      ws.send(JSON.stringify({
+        type: "submit",
+        request: {
+          task: el("task").value,
+          primaryModel: el("primary-model").value,
+          laneModels: {
+            left: el("lane-left-model").value,
+            right: el("lane-right-model").value
+          }
+        }
+      }));
+    });
+
+    el("cancel").addEventListener("click", function () {
+      if (state.running && ws && ws.readyState === 1) {
+        ws.send(JSON.stringify({ type: "cancel" }));
+      }
+    });
   }
 
   populateModelLists();
@@ -187,8 +337,9 @@ export async function startServer(
 	});
 
 	const wss = new WebSocketServer({ server, path: WS_PATH });
-	// Ticket #4 implements the run lifecycle over accepted connections. For the
-	// shell we only need to accept the upgrade, which the WebSocketServer does.
+	wss.on("connection", (ws) => {
+		handleConnection(ws, options);
+	});
 
 	let boundPort = port;
 	await new Promise<void>((resolve, reject) => {
@@ -225,6 +376,132 @@ export async function startServer(
 			});
 		},
 	};
+}
+
+/** One run bound to a WebSocket connection; the connection is its identity. */
+interface ConnectionRun {
+	/** The factory handle for the active run on this connection. */
+	readonly handle: RunHandle;
+}
+
+/** A message a browser tab sends to the /ws server. */
+interface ClientMessage {
+	readonly type: "submit" | "cancel" | string;
+	/** Populated for a submit; the run request to forward to the factory. */
+	readonly request?: unknown;
+}
+
+/**
+ * The run lifecycle over one WebSocket connection (ticket #4).
+ *
+ * Each tab owns one run for the life of its connection: submit starts the
+ * injected factory's run and streams its events back; cancel and disconnect
+ * abort the run. The connection is the run's identity, so multiple tabs run
+ * independent comparisons and closing or refreshing a tab cancels only that
+ * tab's run (per-tab isolation, parent ticket #1).
+ */
+function handleConnection(ws: WebSocket, options: ServerOptions): void {
+	let current: ConnectionRun | undefined;
+
+	/** Forward one run event to the client, logging lane errors server-side. */
+	const onEvent = (event: RunEvent): void => {
+		if (event.type === "lane/worker/error") {
+			// The reason is for the server console only, never the UI.
+			console.error(
+				`dsh-compare: lane ${event.laneId} worker error: ${event.reason}`,
+			);
+		}
+		if (event.type === "run/done" || event.type === "run/canceled") {
+			// The run reached a terminal state; a new submit may start one.
+			current = undefined;
+		}
+		sendEvent(ws, event);
+	};
+
+	ws.on("message", (data) => {
+		const message = parseMessage(data);
+		if (message === undefined) {
+			return;
+		}
+		if (message.type === "submit") {
+			if (current !== undefined) {
+				// One run per connection; a submit mid-run is ignored.
+				console.error(
+					"dsh-compare: submit ignored — a run is already active on this tab",
+				);
+				return;
+			}
+			if (options.startRun === undefined) {
+				// Absent until ticket #5 wires the harness-backed factory.
+				console.error(
+					"dsh-compare: no run factory wired (ticket #5); submit ignored",
+				);
+				return;
+			}
+			if (isRunRequest(message.request)) {
+				current = {
+					handle: options.startRun(message.request, onEvent),
+				};
+			}
+		} else if (message.type === "cancel") {
+			current?.handle.cancel();
+		}
+	});
+
+	ws.on("close", () => {
+		// Closing or refreshing a tab cancels only this tab's run.
+		current?.handle.cancel();
+		current = undefined;
+	});
+}
+
+/** Serialize and send one run event to the client, if the socket is open. */
+function sendEvent(ws: WebSocket, event: RunEvent): void {
+	if (ws.readyState === WebSocket.OPEN) {
+		ws.send(JSON.stringify(event));
+	}
+}
+
+/** Parse a text WS frame into a client message, or undefined if malformed. */
+function parseMessage(data: RawData): ClientMessage | undefined {
+	let text: string;
+	if (typeof data === "string") {
+		text = data;
+	} else if (Array.isArray(data)) {
+		text = Buffer.concat(data).toString();
+	} else if (data instanceof ArrayBuffer) {
+		text = Buffer.from(data).toString();
+	} else {
+		text = data.toString();
+	}
+	try {
+		const value: unknown = JSON.parse(text);
+		if (isRecord(value) && typeof value.type === "string") {
+			return { type: value.type, request: value.request };
+		}
+	} catch {
+		// Not JSON; ignore the malformed frame.
+	}
+	return undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
+/** The light shape check that makes a submit safe to forward to the factory. */
+function isRunRequest(value: unknown): value is RunRequest {
+	if (!isRecord(value)) {
+		return false;
+	}
+	const laneModels = value.laneModels;
+	return (
+		typeof value.task === "string" &&
+		typeof value.primaryModel === "string" &&
+		isRecord(laneModels) &&
+		typeof laneModels.left === "string" &&
+		typeof laneModels.right === "string"
+	);
 }
 
 /** Handle one http request: the page, the model list, or a 404. */

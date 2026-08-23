@@ -10,6 +10,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import {
+	createScriptedRunFactory,
+	type RunEvent,
+	type RunRequest,
+} from "../src/run-factory.ts";
+import {
 	type ModelOption,
 	type ServerHandle,
 	type ServerOptions,
@@ -135,5 +140,258 @@ describe("websocket", () => {
 		} finally {
 			ws.close();
 		}
+	});
+});
+/**
+ * ws run lifecycle (ticket #4) — driven entirely through the injected
+ * scripted run factory: no real LLM, no harness boot. Each test injects the
+ * fake startRun, drives the socket the way a browser tab would, and asserts
+ * the run events routed to that tab plus the factory calls they produce.
+ */
+function connect(handle: ServerHandle): Promise<WebSocket> {
+	return new Promise((resolve, reject) => {
+		const ws = new WebSocket(handle.wsUrl);
+		ws.on("open", () => resolve(ws));
+		ws.on("error", reject);
+	});
+}
+
+function sendJson(ws: WebSocket, value: unknown): void {
+	ws.send(JSON.stringify(value));
+}
+
+interface SubmitMessage {
+	readonly type: "submit";
+	readonly request: RunRequest;
+}
+
+function submitMessage(request: RunRequest): SubmitMessage {
+	return { type: "submit", request };
+}
+
+function baseRequest(task: string): RunRequest {
+	return {
+		task,
+		primaryModel: "deepseek/deepseek-v4-flash-0731",
+		laneModels: {
+			left: "deepseek/deepseek-v4-flash-0731",
+			right: "openai/gpt-5.6-luna",
+		},
+	};
+}
+
+function delay(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parse<T>(data: unknown): T {
+	return JSON.parse(String(data)) as T;
+}
+
+async function waitFor<T>(
+	received: readonly T[],
+	pred: (value: T) => boolean,
+	timeoutMs = 2000,
+): Promise<T> {
+	const start = Date.now();
+	for (;;) {
+		const found = received.find(pred);
+		if (found !== undefined) {
+			return found;
+		}
+		if (Date.now() - start > timeoutMs) {
+			throw new Error("timed out waiting for a forwarded event");
+		}
+		await delay(10);
+	}
+}
+
+async function waitUntil(pred: () => boolean, timeoutMs = 2000): Promise<void> {
+	const start = Date.now();
+	while (!pred()) {
+		if (Date.now() - start > timeoutMs) {
+			throw new Error("timed out waiting for condition");
+		}
+		await delay(10);
+	}
+}
+
+describe("ws run lifecycle", () => {
+	it("submit starts the run factory and forwards its run/started", async () => {
+		const factory = createScriptedRunFactory();
+		const handle = await start({ port: 0, startRun: factory.startRun });
+		const ws = await connect(handle);
+		const received: RunEvent[] = [];
+		ws.on("message", (data) => received.push(parse<RunEvent>(data)));
+		try {
+			sendJson(ws, submitMessage(baseRequest("haiku")));
+			await waitFor(received, (e) => e.type === "run/started");
+
+			expect(factory.lastRun?.request).toEqual(baseRequest("haiku"));
+			expect(received[0]).toEqual({
+				type: "run/started",
+				runId: factory.lastRun?.handle.id,
+			});
+		} finally {
+			ws.close();
+		}
+	});
+
+	it("routes worker events to their lane and orchestrator events to the top", async () => {
+		const factory = createScriptedRunFactory();
+		const handle = await start({ port: 0, startRun: factory.startRun });
+		const ws = await connect(handle);
+		const received: RunEvent[] = [];
+		ws.on("message", (data) => received.push(parse<RunEvent>(data)));
+		try {
+			sendJson(ws, submitMessage(baseRequest("haiku")));
+			await waitFor(received, (e) => e.type === "run/started");
+			const run = factory.lastRun;
+			if (run === undefined) throw new Error("expected a started run");
+
+			run.emit({ type: "lane/worker/started", laneId: "left" });
+			run.emit({ type: "orchestrator/delta", text: "spawning workers" });
+			run.emit({ type: "lane/worker/delta", laneId: "left", text: "the" });
+			run.emit({ type: "lane/worker/delta", laneId: "right", text: "sea" });
+
+			await waitFor(
+				received,
+				(e) => e.type === "lane/worker/delta" && e.laneId === "right",
+			);
+			const leftDelta = received.find(
+				(e) => e.type === "lane/worker/delta" && e.laneId === "left",
+			);
+			expect(leftDelta).toEqual({
+				type: "lane/worker/delta",
+				laneId: "left",
+				text: "the",
+			});
+			const orchestrator = received.find(
+				(e) => e.type === "orchestrator/delta",
+			);
+			expect(orchestrator).toEqual({
+				type: "orchestrator/delta",
+				text: "spawning workers",
+			});
+		} finally {
+			ws.close();
+		}
+	});
+
+	it("cancel aborts the whole run via the factory's cancel()", async () => {
+		const factory = createScriptedRunFactory();
+		const handle = await start({ port: 0, startRun: factory.startRun });
+		const ws = await connect(handle);
+		try {
+			sendJson(ws, submitMessage(baseRequest("haiku")));
+			await waitUntil(() => factory.lastRun !== undefined);
+			expect(factory.lastRun?.canceled).toBe(false);
+
+			sendJson(ws, { type: "cancel" });
+			await waitUntil(() => factory.lastRun?.canceled === true);
+		} finally {
+			ws.close();
+		}
+	});
+
+	it("a terminal run/canceled frees the tab to start a new run", async () => {
+		const factory = createScriptedRunFactory();
+		const handle = await start({ port: 0, startRun: factory.startRun });
+		const ws = await connect(handle);
+		try {
+			sendJson(ws, submitMessage(baseRequest("haiku one")));
+			await waitUntil(() => factory.lastRun !== undefined);
+
+			// Production emits run/canceled once the abort completes.
+			factory.lastRun?.emit({ type: "run/canceled", runId: "0" });
+			await waitUntil(() => factory.runs.length === 1);
+
+			sendJson(ws, submitMessage(baseRequest("haiku two")));
+			await waitUntil(() => factory.runs.length === 2);
+			expect(factory.runs[1]?.request.task).toBe("haiku two");
+		} finally {
+			ws.close();
+		}
+	});
+
+	it("a lane error is logged to the server console and forwarded", async () => {
+		const consoleError = vi
+			.spyOn(console, "error")
+			.mockImplementation(() => {});
+		const factory = createScriptedRunFactory();
+		const handle = await start({ port: 0, startRun: factory.startRun });
+		const ws = await connect(handle);
+		const received: RunEvent[] = [];
+		ws.on("message", (data) => received.push(parse<RunEvent>(data)));
+		try {
+			const request = baseRequest("haiku");
+			sendJson(ws, submitMessage(request));
+			await waitFor(received, (e) => e.type === "run/started");
+
+			factory.lastRun?.emit({
+				type: "lane/worker/error",
+				laneId: "left",
+				reason: "rate limited",
+			});
+			const errored = (await waitFor(
+				received,
+				(e) => e.type === "lane/worker/error",
+			)) as Extract<RunEvent, { type: "lane/worker/error" }>;
+			expect(errored.laneId).toBe("left");
+			expect(errored.reason).toBe("rate limited");
+			expect(consoleError).toHaveBeenCalledWith(
+				expect.stringContaining("rate limited"),
+			);
+		} finally {
+			consoleError.mockRestore();
+			ws.close();
+		}
+	});
+
+	it("closing a tab cancels only its run; two tabs are independent", async () => {
+		const factory = createScriptedRunFactory();
+		const handle = await start({ port: 0, startRun: factory.startRun });
+		const wsA = await connect(handle);
+		const wsB = await connect(handle);
+		try {
+			sendJson(wsA, submitMessage(baseRequest("tab a")));
+			sendJson(wsB, submitMessage(baseRequest("tab b")));
+			await waitUntil(() => factory.runs.length === 2);
+			expect(factory.runs.map((r) => r.request.task)).toEqual([
+				"tab a",
+				"tab b",
+			]);
+
+			wsA.close();
+			await waitUntil(() => factory.runs[0]?.canceled === true);
+			expect(factory.runs[1]?.canceled).toBe(false);
+		} finally {
+			wsA.close();
+			wsB.close();
+		}
+	});
+});
+describe("client run-lifecycle wiring", () => {
+	it("serves a page whose script routes run events, locks inputs, submits/cancels", async () => {
+		const handle = await start({ port: 0 });
+		const res = await fetch(`${handle.url}/`);
+		const html = await res.text();
+
+		// Submit builds the run request with the three model slots; cancel is wired.
+		expect(html).toContain('type: "submit"');
+		expect(html).toContain("laneModels");
+		expect(html).toContain('type: "cancel"');
+		// Streaming routes lane events to their panel and orchestrator to the top.
+		expect(html).toContain("ws.onmessage");
+		expect(html).toContain("run/started");
+		expect(html).toContain("run/done");
+		expect(html).toContain("run/canceled");
+		expect(html).toContain("lane/worker/error");
+		expect(html).toContain("lane/worker/delta");
+		expect(html).toContain("orchestrator/delta");
+		// All inputs are locked during a run except Cancel.
+		expect(html).toContain("setInputsLocked");
+		expect(html).toContain("el(id).disabled = locked");
+		expect(html).toContain('id="cancel"');
 	});
 });
