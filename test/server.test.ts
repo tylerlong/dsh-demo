@@ -109,11 +109,33 @@ describe("static page", () => {
 		expect(html).toMatch(/submit/i);
 		expect(html).toMatch(/cancel/i);
 
+		// Workspace input lives in the run configuration and is empty by default;
+		// submit is served disabled (enabled only once a workspace is entered),
+		// and the published localforage build is served for remembering it.
+		expect(html).toContain('id="workspace"');
+		expect(html).toContain('<input id="workspace" type="text"');
+		expect(html).toContain(
+			'<button id="submit" type="button" disabled>Submit</button>',
+		);
+		expect(html).toContain("/vendor/localforage.js");
+
 		// Two lanes, each with a model dropdown and an output panel.
 		expect(html).toContain('id="lane-left-model"');
 		expect(html).toContain('id="lane-left-output"');
 		expect(html).toContain('id="lane-right-model"');
 		expect(html).toContain('id="lane-right-output"');
+	});
+});
+
+describe("vendor localforage asset", () => {
+	it("serves the published localforage UMD build for remembering the workspace", async () => {
+		const handle = await start({ port: 0 });
+		const res = await fetch(`${handle.url}/vendor/localforage.js`);
+		expect(res.status).toBe(200);
+		expect(res.headers.get("content-type")).toContain("text/javascript");
+		const body = await res.text();
+		expect(body.length).toBeGreaterThan(1000);
+		expect(body).toMatch(/localforage/);
 	});
 });
 

@@ -17,7 +17,13 @@ const FAST_TASK = "Reply with the single word: ready";
 const LONG_TASK =
 	"Write a detailed 1000-word essay about the history of computing from 1940 to the present, covering hardware, software, and the internet.";
 
-test("page loads, WS connects, dropdowns populate, no console errors", async ({
+/**
+ * The workspace used for runs in these tests. The playwright webServer boots
+ * pnpm serve with the repo as its cwd, so this resolves to an existing folder.
+ */
+const WORKSPACE = ".";
+
+test("page loads, WS connects, dropdowns populate, workspace input, no console errors", async ({
 	page,
 }) => {
 	const errors: string[] = [];
@@ -43,12 +49,21 @@ test("page loads, WS connects, dropdowns populate, no console errors", async ({
 		primaryCount,
 	);
 
+	// The workspace input is present and empty by default; submit starts disabled
+	// and enables only once a workspace is entered.
+	await expect(page.locator("#workspace")).toBeVisible();
+	await expect(page.locator("#workspace")).toHaveValue("");
+	await expect(page.locator("#submit")).toBeDisabled();
+	await page.fill("#workspace", WORKSPACE);
+	await expect(page.locator("#submit")).toBeEnabled();
+
 	// No console or page errors — a syntax error in the served script would
-	// fail here (regression: the inline script must parse).
+	// fail here (regression: the inline script must parse; the localforage UMD
+	// build must also load without throwing).
 	expect(errors).toEqual([]);
 });
 
-test("submit runs the full comparison: both lanes done, summary, inputs unlock", async ({
+test("submit runs the full comparison: both lanes done, no summary, inputs unlock", async ({
 	page,
 }) => {
 	const errors: string[] = [];
@@ -60,6 +75,8 @@ test("submit runs the full comparison: both lanes done, summary, inputs unlock",
 	});
 
 	await page.fill("#task", FAST_TASK);
+	await page.fill("#workspace", WORKSPACE);
+	await expect(page.locator("#submit")).toBeEnabled();
 	await page.click("#submit");
 
 	// The run reaches a terminal "done" state (fast models may finish before
@@ -72,7 +89,8 @@ test("submit runs the full comparison: both lanes done, summary, inputs unlock",
 	await expect(page.locator("#lane-left-status")).toContainText("done");
 	await expect(page.locator("#lane-right-status")).toContainText("done");
 
-	// The top section received the orchestrator's summary (non-empty output).
+	// The top section shows the run-level spawn notice, not a model summary
+	// (no run/summary is produced; the orchestrator is never invoked).
 	const primaryOutput = await page.locator("#primary-output").textContent();
 	expect(primaryOutput ?? "").not.toBe("");
 
@@ -96,6 +114,7 @@ test("cancel aborts a running comparison and returns the UI to idle", async ({
 
 	// A long task keeps the run in flight so we can cancel it.
 	await page.fill("#task", LONG_TASK);
+	await page.fill("#workspace", WORKSPACE);
 	await page.click("#submit");
 
 	// Both lanes start (running chips) — the run is genuinely in progress.

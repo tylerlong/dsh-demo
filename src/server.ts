@@ -15,7 +15,9 @@
  * Run directly with `pnpm serve` (boots the harness for the model list), or
  * embed the seam: tests inject `startServer` with a fixed loadModels.
  */
+import { readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
+import { createRequire } from "node:module";
 import WebSocket, { type RawData, WebSocketServer } from "ws";
 import type { ModelOption } from "./model-list.ts";
 import { resolveDefaults } from "./model-list.ts";
@@ -37,6 +39,20 @@ export const DEFAULT_HOST = "127.0.0.1";
 export const DEFAULT_PORT = 4173;
 /** WebSocket endpoint path. */
 export const WS_PATH = "/ws";
+
+/** The require hook (ESM) used to locate the published localforage UMD build. */
+const require = createRequire(import.meta.url);
+/** Lazily read the localforage UMD source served to the browser for memory. */
+let localforageSource: string | undefined;
+function localforageScript(): string {
+	if (localforageSource === undefined) {
+		localforageSource = readFileSync(
+			require.resolve("localforage/dist/localforage.js"),
+			"utf8",
+		);
+	}
+	return localforageSource;
+}
 
 /** Options for {@link startServer}. */
 export interface ServerOptions {
@@ -127,7 +143,7 @@ function pageHtml(): string {
         <label for="workspace">Workspace folder</label>
         <input id="workspace" type="text" placeholder="Path the run agents may read…" />
       </div>
-      <button id="submit" type="button">Submit</button>
+      <button id="submit" type="button" disabled>Submit</button>
       <button id="cancel" type="button" disabled>Cancel</button>
     </div>
     <div class="output" id="primary-output" aria-label="Primary output"></div>
@@ -155,6 +171,7 @@ function pageHtml(): string {
     </section>
   </div>
 </main>
+<script src="/vendor/localforage.js"></script>
 <script>
 (function () {
   "use strict";
@@ -225,11 +242,45 @@ function pageHtml(): string {
 
   // ---- run-level state: lock the inputs, drive a run-level timer ----
   function showRunStatus(text) { el("primary-status").textContent = text; }
+  function currentWorkspace() {
+    return el("workspace").value.trim();
+  }
+  // Submit is usable only when a run is not active and a workspace is present.
+  function syncSubmitState() {
+    el("submit").disabled = state.running || currentWorkspace() === "";
+  }
   function setInputsLocked(locked) {
-    ["task", "primary-model", "lane-left-model", "lane-right-model", "submit"].forEach(function (id) {
+    ["task", "primary-model", "lane-left-model", "lane-right-model"].forEach(function (id) {
       el(id).disabled = locked;
     });
     el("cancel").disabled = !locked;
+    syncSubmitState();
+  }
+  // Remember the last used workspace; restored on load when it still exists.
+  function rememberWorkspace() {
+    var w = currentWorkspace();
+    if (w === "") return;
+    localforage.setItem("workspace", w).catch(function () {});
+  }
+  function restoreWorkspace() {
+    localforage.getItem("workspace").then(function (saved) {
+      if (typeof saved !== "string" || saved === "") return;
+      fetch("/api/workspace/check", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path: saved })
+      })
+        .then(function (res) { return res.json(); })
+        .then(function (data) {
+          if (data && data.exists) {
+            el("workspace").value = saved;
+          } else {
+            localforage.removeItem("workspace").catch(function () {});
+          }
+          syncSubmitState();
+        })
+        .catch(function () { syncSubmitState(); });
+    }).catch(function () { syncSubmitState(); });
   }
   function startRun() {
     state.running = true;
@@ -304,6 +355,8 @@ function pageHtml(): string {
 
     el("submit").addEventListener("click", function () {
       if (state.running || !ws || ws.readyState !== 1) return;
+      var workspace = currentWorkspace();
+      rememberWorkspace();
       ws.send(JSON.stringify({
         type: "submit",
         request: {
@@ -313,10 +366,11 @@ function pageHtml(): string {
             left: el("lane-left-model").value,
             right: el("lane-right-model").value
           },
-          workspace: el("workspace").value
+          workspace: workspace
         }
       }));
     });
+    el("workspace").addEventListener("input", function () { syncSubmitState(); });
 
     el("cancel").addEventListener("click", function () {
       if (state.running && ws && ws.readyState === 1) {
@@ -327,6 +381,8 @@ function pageHtml(): string {
 
   populateModelLists();
   openSocket();
+  restoreWorkspace();
+  syncSubmitState();
 })();
 </script>
 </body>
@@ -541,6 +597,13 @@ async function handleRequest(
 	if (method === "GET" && (url === "/" || url === "/index.html")) {
 		res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
 		res.end(pageHtml());
+		return;
+	}
+	if (method === "GET" && url === "/vendor/localforage.js") {
+		// The published localforage UMD build, served so the page can persist
+		// the remembered workspace (ticket #13). No bundler: this static file.
+		res.writeHead(200, { "content-type": "text/javascript; charset=utf-8" });
+		res.end(localforageScript());
 		return;
 	}
 	if (method === "GET" && url === "/api/models") {
