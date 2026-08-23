@@ -18,14 +18,14 @@
 		"format": "biome format . --write"
 	},
 	"dependencies": {
-		"@deepseek-ai/cordis": "link:/Users/tyler.liu/src/ai/deepseek-harness/vendor/cordis",
-		"@deepseek-ai/dsh-agent": "link:/Users/tyler.liu/src/ai/deepseek-harness/packages/core/agent",
-		"@deepseek-ai/dsh-app-boot": "link:/Users/tyler.liu/src/ai/deepseek-harness/packages/boot/app-boot",
-		"@deepseek-ai/dsh-cmdline": "link:/Users/tyler.liu/src/ai/deepseek-harness/packages/boot/cmdline",
-		"@deepseek-ai/dsh-home-paths": "link:/Users/tyler.liu/src/ai/deepseek-harness/packages/util/home-paths",
-		"@deepseek-ai/dsh-llm": "link:/Users/tyler.liu/src/ai/deepseek-harness/packages/llm/llm",
-		"@deepseek-ai/dsh-session": "link:/Users/tyler.liu/src/ai/deepseek-harness/packages/core/session",
-		"@deepseek-ai/dsh-subagent": "link:/Users/tyler.liu/src/ai/deepseek-harness/packages/subagent/subagent",
+		"@deepseek-ai/cordis": "^4.0.1",
+		"@deepseek-ai/dsh-agent": "^0.1.0-rc.7",
+		"@deepseek-ai/dsh-app-boot": "^0.1.0-rc.7",
+		"@deepseek-ai/dsh-cmdline": "^0.1.0-rc.7",
+		"@deepseek-ai/dsh-home-paths": "^0.1.0-rc.7",
+		"@deepseek-ai/dsh-llm": "^0.1.0-rc.7",
+		"@deepseek-ai/dsh-session": "^0.1.0-rc.7",
+		"@deepseek-ai/dsh-subagent": "^0.1.0-rc.7",
 		"ws": "^8.21.3"
 	},
 	"devDependencies": {

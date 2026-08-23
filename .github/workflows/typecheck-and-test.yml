@@ -1,0 +1,36 @@
+name: typecheck-and-test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  typecheck-and-test:
+    # The Nexus registry (nexus3.int.rclabenv.com) is INTERNAL — only reachable
+    # on the corporate network. A GitHub-hosted (ubuntu-latest) runner cannot
+    # reach it, so this job runs on a self-hosted runner that is on the
+    # internal network. Label the runner accordingly (e.g. "self-hosted").
+    runs-on: [self-hosted]
+
+    env:
+      # Must be set BEFORE pnpm install so deps resolve from the published
+      # @deepseek-ai packages on the internal registry, not local link: paths.
+      COREPACK_NPM_REGISTRY: https://nexus3.int.rclabenv.com/repository/npm-all/
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.22.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install
+
+      - run: pnpm typecheck
+
+      - run: pnpm test

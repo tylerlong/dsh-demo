@@ -357,9 +357,7 @@ async function runReviewer(
 	try {
 		const result = await run.result;
 		if (result.stopReason !== "completed" || result.structured === undefined) {
-			throw new Error(
-				`reviewer ${result.stopReason}${result.diagnostic === undefined ? "" : `: ${result.diagnostic}`}`,
-			);
+			throw new Error(`reviewer ${result.stopReason}`);
 		}
 		const feedbacks = (result.structured as { feedbacks: Feedback[] })
 			.feedbacks;
