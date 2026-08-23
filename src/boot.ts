@@ -20,6 +20,9 @@
  *     monorepo's pnpm virtual store, so every `@deepseek-ai/*` plugin
  *     specifier resolves without a profile directory or the home flat
  *     fallback,
+ *   - compose the shared storage stack (storage, storage-json, storage-domain,
+ *     workspace) — the same rows the web-app bundle composes — so the shared
+ *     workspace registry reads DSH web's workspace table (`$DSH_HOME/storages`),
  *   - provide `cmdlineArgs` + `appExit` (what the CLI would provide).
  */
 
@@ -56,6 +59,13 @@ const ROOT_CONFIG_PATH = fileURLToPath(
 
 /** Optional project config file (`dsh-demo.config.json`). */
 const CONFIG_PATH = join(PROJECT_ROOT, "dsh-demo.config.json");
+
+/**
+ * Overlay that mounts the shared storage stack (storage, storage-json,
+ * storage-domain, workspace) — the same rows the web-app bundle composes — so
+ * `ctx.workspaceRegistry` reads the same workspace table as DSH web.
+ */
+const STORAGE_PATCH_PATH = join(PROJECT_ROOT, "storage.cordis.patch.yml");
 
 /**
  * Location overrides from `dsh-demo.config.json`. Every key is optional;
@@ -182,6 +192,7 @@ export async function bootHarness(
 	const patches = [
 		...loadOverlayPatches("dsh-demo", basePatch),
 		...overridePatches(loadDemoConfig()),
+		...loadOverlayPatches("dsh-demo", STORAGE_PATCH_PATH),
 	];
 
 	// Resolve every bare `@deepseek-ai/*` plugin specifier from the DSH

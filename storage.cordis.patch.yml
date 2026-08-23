@@ -1,0 +1,25 @@
+# dsh-compare storage stack: the shared workspace registry.
+#
+# Mirrors the web-app bundle's storage rows (packages/bundle/web-app/
+# cordis.patch.yml) so `ctx.workspaceRegistry` composes and reads the SAME
+# workspace table as DSH web ($DSH_HOME/storages/workspace.json). The base
+# bundle does not ship storage/workspace, so this overlay mounts them here.
+#
+# dsh-compare is read-only over the registry — it never calls create, delete,
+# insertBefore, or archiveSession; DSH web owns the catalog.
+- insert:
+    - id: storage
+      name: '@deepseek-ai/dsh-storage'
+
+    - id: storage-json
+      name: '@deepseek-ai/dsh-storage-json'
+      config:
+        root: !!js dshHomePath('storages')
+
+    - id: storage-domain
+      name: '@deepseek-ai/dsh-storage-domain'
+      config:
+        backend: json
+
+    - id: workspace
+      name: '@deepseek-ai/dsh-workspace'
