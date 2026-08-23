@@ -21,7 +21,7 @@ import type { SubagentResult, SubagentRun } from "@deepseek-ai/dsh-subagent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRunFactory, WORKER_TOOLS } from "../src/real-run-factory.ts";
 import type { RunEvent, RunRequest, StartRun } from "../src/run-factory.ts";
-import { resolveWorkspace, workspaceExists } from "../src/workspace.ts";
+import { resolveWorkspace } from "../src/workspace.ts";
 
 const MODELS = [
 	{
@@ -242,7 +242,6 @@ describe("real run factory", () => {
 		// directory (parent #9: an empty workspace is invalid).
 		expect(resolveWorkspace("")).toBeUndefined();
 		expect(resolveWorkspace("   ")).toBeUndefined();
-		expect(workspaceExists("")).toBe(false);
 	});
 
 	it("routes worker session text deltas to the owning lane", async () => {

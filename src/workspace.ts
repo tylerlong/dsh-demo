@@ -4,10 +4,10 @@
  * A run workspace is a folder the run's agents (orchestrator and both workers)
  * may read for context (parent ticket #9). A submitted workspace path may be
  * absolute or relative; relative paths resolve against the server working
- * directory (process.cwd()). Both the harness-backed run factory (real-run-
- * factory.ts) and the server workspace-existence endpoint (server.ts) share
- * this resolver, so the run rejects a missing folder exactly when the page's
- * existence check reports it missing.
+ * directory (process.cwd()). The harness-backed run factory (real-run-
+ * factory.ts) uses this resolver as defense-in-depth validation of the
+ * submitted path — the page's dropdown only offers existing canonical folders
+ * (workspace-list.ts), but a folder removed after load must still fail fast.
  */
 import { realpathSync, statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
@@ -33,9 +33,4 @@ export function resolveWorkspace(path: string): string | undefined {
 		// Not a resolvable existing directory.
 	}
 	return undefined;
-}
-
-/** Whether a path resolves to an existing folder (the page's existence check). */
-export function workspaceExists(path: string): boolean {
-	return resolveWorkspace(path) !== undefined;
 }

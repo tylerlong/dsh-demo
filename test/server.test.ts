@@ -21,6 +21,7 @@ import {
 	type ModelOption,
 	type ServerHandle,
 	type ServerOptions,
+	type WorkspaceOption,
 	startServer,
 } from "../src/server.ts";
 
@@ -49,12 +50,29 @@ const MODELS: ModelOption[] = [
 	},
 ];
 
+/** Injected fake workspace rows served over /api/workspaces (ticket #19). */
+const WORKSPACES: WorkspaceOption[] = [
+	{
+		id: "ws-alpha",
+		path: "/opt/alpha-project",
+		title: "Alpha",
+		newestSessionAt: 1700000000000,
+	},
+	{
+		id: "ws-beta",
+		path: "/opt/beta-project",
+		title: "Beta",
+		newestSessionAt: 1700000500000,
+	},
+];
+
 /** Every running server, closed together after each test. */
 const live: ServerHandle[] = [];
 
 function serverOptions(overrides: Partial<ServerOptions> = {}): ServerOptions {
 	return {
 		loadModels: () => MODELS,
+		loadWorkspaces: () => WORKSPACES,
 		...overrides,
 	};
 }
@@ -153,31 +171,33 @@ describe("model list endpoint", () => {
 	});
 });
 
-describe("workspace check endpoint", () => {
-	it("reports an existing folder as present", async () => {
+describe("workspace list endpoint", () => {
+	it("serves the injected workspace rows", async () => {
+		const handle = await start({ port: 0 });
+		const res = await fetch(`${handle.url}/api/workspaces`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as WorkspaceOption[];
+		expect(body).toEqual(WORKSPACES);
+	});
+
+	it("serves an injected empty list", async () => {
+		const handle = await start({ port: 0, loadWorkspaces: () => [] });
+		const res = await fetch(`${handle.url}/api/workspaces`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as WorkspaceOption[];
+		expect(body).toEqual([]);
+	});
+});
+
+describe("obsolete workspace check route", () => {
+	it("is gone — the endpoint returns 404", async () => {
 		const handle = await start({ port: 0 });
 		const res = await fetch(`${handle.url}/api/workspace/check`, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({ path: WORKSPACE }),
 		});
-		expect(res.status).toBe(200);
-		const body = (await res.json()) as { exists: boolean };
-		expect(body.exists).toBe(true);
-	});
-
-	it("reports a missing folder as absent", async () => {
-		const handle = await start({ port: 0 });
-		const res = await fetch(`${handle.url}/api/workspace/check`, {
-			method: "POST",
-			headers: { "content-type": "application/json" },
-			body: JSON.stringify({
-				path: join(tmpdir(), "dsh-ws-definitely-missing"),
-			}),
-		});
-		expect(res.status).toBe(200);
-		const body = (await res.json()) as { exists: boolean };
-		expect(body.exists).toBe(false);
+		expect(res.status).toBe(404);
 	});
 });
 

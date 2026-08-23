@@ -27,6 +27,7 @@
 		"src/workspace.ts",
 		"src/server.ts",
 		"src/model-list.ts",
+		"src/workspace-list.ts",
 		"src/serve.ts",
 		"test/run-factory.test.ts",
 		"test/real-run-factory.test.ts",

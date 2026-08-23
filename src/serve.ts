@@ -16,6 +16,11 @@ import { bootHarness } from "./boot.ts";
 import { convertLlmModels, type LlmLike } from "./model-list.ts";
 import { createRunFactory } from "./real-run-factory.ts";
 import { startServer } from "./server.ts";
+import {
+	convertWorkspaceList,
+	type SessionStoreLike,
+	type WorkspaceRegistryLike,
+} from "./workspace-list.ts";
 
 /** Port for the server; override with DSH_COMPARE_PORT. */
 const PORT = Number(process.env.DSH_COMPARE_PORT ?? 4173);
@@ -30,6 +35,18 @@ try {
 			convertLlmModels(llm as unknown as LlmLike).catch((error) => {
 				console.error(
 					`dsh-compare: failed to read the configured model list: ${error instanceof Error ? error.message : error}`,
+				);
+				return [];
+			}),
+		// Production wires the seam to the shared workspace registry + session
+		// store (read-only; the workspace catalog is DSH web's, ticket #19).
+		loadWorkspaces: () =>
+			convertWorkspaceList(
+				ctx.get("workspaceRegistry") as unknown as WorkspaceRegistryLike,
+				ctx.get("sessionPersistence") as unknown as SessionStoreLike,
+			).catch((error) => {
+				console.error(
+					`dsh-compare: failed to read the shared workspace list: ${error instanceof Error ? error.message : error}`,
 				);
 				return [];
 			}),

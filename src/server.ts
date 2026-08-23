@@ -19,6 +19,7 @@ import { readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { createRequire } from "node:module";
 import WebSocket, { type RawData, WebSocketServer } from "ws";
+import type { WorkspaceOption } from "./workspace-list.ts";
 import type { ModelOption } from "./model-list.ts";
 import { resolveDefaults } from "./model-list.ts";
 import type {
@@ -28,10 +29,11 @@ import type {
 	RunRequest,
 	StartRun,
 } from "./run-factory.ts";
-import { workspaceExists } from "./workspace.ts";
 
 /** Re-export the dropdown option shape the /api/models endpoint serves. */
 export type { ModelOption } from "./model-list.ts";
+/** Re-export the workspace row shape the /api/workspaces endpoint serves. */
+export type { WorkspaceOption } from "./workspace-list.ts";
 
 /** Default host the server binds to (loopback only). */
 export const DEFAULT_HOST = "127.0.0.1";
@@ -67,6 +69,16 @@ export interface ServerOptions {
 	readonly loadModels: () =>
 		| Promise<readonly ModelOption[]>
 		| readonly ModelOption[];
+	/**
+	 * Inject the workspace list (ticket #19), mirroring {@link loadModels}.
+	 * Production passes a loader backed by the shared workspace registry and
+	 * the shared session store (see workspace-list.ts); tests inject a fixed
+	 * list. Backs GET /api/workspaces so the page can seed its workspace
+	 * dropdown and preselect the most recently used workspace.
+	 */
+	readonly loadWorkspaces: () =>
+		| Promise<readonly WorkspaceOption[]>
+		| readonly WorkspaceOption[];
 	/**
 	 * Inject the run factory (ticket #4): the server's only dependency on
 	 * orchestration. Tests inject the scripted fake (run-factory.ts); the
@@ -586,7 +598,7 @@ function isRunRequest(value: unknown): value is RunRequest {
 	);
 }
 
-/** Handle one http request: the page, the model list, the workspace check, or a 404. */
+/** Handle one http request: the page, the model list, the workspace list, or a 404. */
 async function handleRequest(
 	req: import("node:http").IncomingMessage,
 	res: import("node:http").ServerResponse,
@@ -613,39 +625,12 @@ async function handleRequest(
 		res.end(JSON.stringify({ models, defaults }));
 		return;
 	}
-	if (method === "POST" && url === "/api/workspace/check") {
-		// The page calls this on load to decide whether to restore the
-		// remembered workspace: report whether the submitted folder exists.
-		const body = await readJsonBody<{ path?: unknown }>(req).catch(() => {
-			res.writeHead(400, { "content-type": "application/json; charset=utf-8" });
-			res.end(JSON.stringify({ exists: false }));
-			return undefined;
-		});
-		if (body !== undefined) {
-			const exists =
-				typeof body.path === "string" && workspaceExists(body.path);
-			res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
-			res.end(JSON.stringify({ exists }));
-		}
+	if (method === "GET" && url === "/api/workspaces") {
+		const workspaces = await options.loadWorkspaces();
+		res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+		res.end(JSON.stringify(workspaces));
 		return;
 	}
 	res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
 	res.end("not found");
-}
-
-/** Read and JSON-parse the request body, or reject on any failure. */
-function readJsonBody<T>(req: import("node:http").IncomingMessage): Promise<T> {
-	return new Promise((resolve, reject) => {
-		const chunks: Buffer[] = [];
-		req.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
-		req.on("end", () => {
-			try {
-				const text = Buffer.concat(chunks).toString("utf-8");
-				resolve(JSON.parse(text) as T);
-			} catch (error) {
-				reject(error);
-			}
-		});
-		req.on("error", reject);
-	});
 }
