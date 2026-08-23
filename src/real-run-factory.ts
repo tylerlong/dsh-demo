@@ -6,8 +6,11 @@
  *
  *   1. resolves the harness provider route for every requested model id from
  *      the same configured model list the dropdowns use (model-list.ts),
- *   2. creates the **orchestrator** (the primary agent) on the requested
- *      primary model with the run workspace as its session cwd (the spawned
+ *   2. validates the run workspace (existing folder, realpath-canonicalized,
+ *      relative paths resolved against the server working directory) before
+ *      any worker spawns — invalid → both lanes error + run/done — then
+ *      creates the **orchestrator** (the primary agent) on the requested
+ *      primary model with the workspace as its session cwd (the spawned
  *      workers inherit it, so every agent in the run reads the same folder),
  *   3. spawns the two **workers** concurrently — one per lane, each on its
  *      lane's model — restricted to the read-only tool filter (read,
@@ -31,6 +34,7 @@ import { SessionId } from "@deepseek-ai/dsh-session";
 import type { SubagentResult, SubagentRun } from "@deepseek-ai/dsh-subagent";
 import { convertLlmModels, type LlmLike } from "./model-list.ts";
 import type { LaneId, RunEvent, StartRun } from "./run-factory.ts";
+import { resolveWorkspace } from "./workspace.ts";
 
 /** The subagent provider that spawns in-process children (see the demos). */
 const SPAWN_PROVIDER = "spawn";
@@ -206,11 +210,20 @@ export function createRunFactory(ctx: Context): StartRun {
 				);
 			}
 
+			// The workspace must be an existing folder (realpath-canonicalized,
+			// relative paths resolved against the server cwd) before any worker
+			// spawns; invalid throws here, so the flow catch emits both lane
+			// errors + run/done with nothing started (see the flow below).
+			const workspace = resolveWorkspace(request.workspace);
+			if (workspace === undefined) {
+				throw new Error(`invalid workspace: ${request.workspace}`);
+			}
+
 			// The orchestrator (primary agent) on the requested model; its session
-			// cwd is the run workspace so spawned workers inherit it.
+			// cwd is the canonical run workspace so spawned workers inherit it.
 			const handle = await ctx.agents.create({
 				sessionId: SessionId(`session-${runId}`),
-				meta: { cwd: request.workspace },
+				meta: { cwd: workspace },
 				agentOptions: {
 					provider: primaryProvider,
 					model: request.primaryModel,

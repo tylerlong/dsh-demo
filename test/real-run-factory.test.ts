@@ -12,12 +12,16 @@
  * and the read-only tool filter.
  */
 
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Context } from "@deepseek-ai/cordis";
 import type { AgentHandle } from "@deepseek-ai/dsh-agent";
 import type { SubagentResult, SubagentRun } from "@deepseek-ai/dsh-subagent";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRunFactory, WORKER_TOOLS } from "../src/real-run-factory.ts";
 import type { RunEvent, RunRequest, StartRun } from "../src/run-factory.ts";
+import { resolveWorkspace } from "../src/workspace.ts";
 
 const MODELS = [
 	{
@@ -28,18 +32,30 @@ const MODELS = [
 	{ provider: "openrouter", id: "openai/gpt-5.6-luna", name: "GPT 5.6 Luna" },
 ];
 
-/** A workspace folder the run agents act on. */
-const WORKSPACE = "/tmp/dsh-compare-workspace";
+/** A workspace folder the run agents act on; a real dir, refreshed per test. */
+let WORKSPACE = "";
+beforeEach(() => {
+	WORKSPACE = mkdtempSync(join(tmpdir(), "dsh-ws-"));
+});
+afterEach(() => {
+	if (WORKSPACE !== "") {
+		rmSync(WORKSPACE, { recursive: true, force: true });
+	}
+});
 
-const REQUEST: RunRequest = {
-	task: "Compare the sea and the sky",
-	primaryModel: "deepseek/deepseek-v4-flash-0731",
-	laneModels: {
-		left: "deepseek/deepseek-v4-flash-0731",
-		right: "openai/gpt-5.6-luna",
-	},
-	workspace: WORKSPACE,
-};
+/** Build the default request against the current per-test workspace. */
+function baseRequest(overrides: Partial<RunRequest> = {}): RunRequest {
+	return {
+		task: "Compare the sea and the sky",
+		primaryModel: "deepseek/deepseek-v4-flash-0731",
+		laneModels: {
+			left: "deepseek/deepseek-v4-flash-0731",
+			right: "openai/gpt-5.6-luna",
+		},
+		workspace: WORKSPACE,
+		...overrides,
+	};
+}
 
 /** A promise the test resolves to settle a spawned run result. */
 function deferred<T>(): {
@@ -168,7 +184,7 @@ async function waitUntil(pred: () => boolean, timeoutMs = 2000): Promise<void> {
 /** Start one run through the real factory and collect its event stream. */
 function startRun(
 	harness: FakeHarness,
-	request: RunRequest = REQUEST,
+	request: RunRequest = baseRequest(),
 ): { events: RunEvent[]; handle: ReturnType<StartRun> } {
 	const events: RunEvent[] = [];
 	const stop = createRunFactory(harness.ctx);
@@ -193,9 +209,13 @@ describe("real run factory", () => {
 			meta: { cwd: string };
 		};
 		expect(createOpts.agentOptions.provider).toBe("openrouter");
-		expect(createOpts.agentOptions.model).toBe(REQUEST.primaryModel);
-		// The orchestrator session cwd is the run workspace (parent #9).
-		expect(createOpts.meta).toEqual({ cwd: WORKSPACE });
+		expect(createOpts.agentOptions.model).toBe(baseRequest().primaryModel);
+		// The orchestrator session cwd is the canonical run workspace (parent #9).
+		expect(createOpts.meta).toEqual({
+			cwd: realpathSync(WORKSPACE),
+		});
+		// The validated workspace is the same canonical folder the factory used.
+		expect(resolveWorkspace(WORKSPACE)).toBe(realpathSync(WORKSPACE));
 
 		const calls = harness.spawned;
 		const toolFilters = calls.map(
@@ -212,7 +232,7 @@ describe("real run factory", () => {
 					.model,
 		);
 		expect(models.sort()).toEqual(
-			[REQUEST.laneModels.left, REQUEST.laneModels.right].sort(),
+			[baseRequest().laneModels.left, baseRequest().laneModels.right].sort(),
 		);
 		expect(events.some((e) => e.type === "orchestrator/delta")).toBe(true);
 	});
@@ -357,13 +377,12 @@ describe("real run factory", () => {
 		// unresolvable. The right lane must error on its own while the left
 		// lane still runs and the run reaches done (parent story 20).
 		const harness = makeHarness([MODELS[0] as (typeof MODELS)[number]]);
-		const request: RunRequest = {
-			...REQUEST,
+		const request: RunRequest = baseRequest({
 			laneModels: {
 				left: "deepseek/deepseek-v4-flash-0731",
 				right: "no-such/model",
 			},
-		};
+		});
 		const { events } = startRun(harness, request);
 
 		// The right lane errors on its own; the left lane still spawns.
@@ -404,5 +423,32 @@ describe("real run factory", () => {
 		const errors = events.filter((e) => e.type === "lane/worker/error");
 		expect(errors.length).toBe(2);
 		expect(events.some((e) => e.type === "run/started")).toBe(true);
+	});
+
+	it("an invalid workspace fails both lanes and ends the run before any worker spawns, with no orchestrator or summary", async () => {
+		const harness = makeHarness();
+		const { events } = startRun(
+			harness,
+			baseRequest({
+				workspace: join(tmpdir(), "definitely-not-a-folder-xyz"),
+			}),
+		);
+
+		await waitUntil(() => events.some((e) => e.type === "run/done"));
+
+		// Both lanes errored and the run ended; no worker started, no
+		// orchestrator was created (no /run/summary either).
+		const errors = events.filter((e) => e.type === "lane/worker/error");
+		expect(errors.length).toBe(2);
+		expect(harness.created.length).toBe(0);
+		expect(harness.spawned.length).toBe(0);
+		expect(events.some((e) => e.type === "lane/worker/started")).toBe(false);
+		expect(
+			events.some((e) => (e as { type: string }).type === "run/summary"),
+		).toBe(false);
+		expect(events.at(-1)).toEqual({
+			type: "run/done",
+			runId: expect.any(String),
+		});
 	});
 });

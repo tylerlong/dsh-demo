@@ -131,6 +131,34 @@ describe("model list endpoint", () => {
 	});
 });
 
+describe("workspace check endpoint", () => {
+	it("reports an existing folder as present", async () => {
+		const handle = await start({ port: 0 });
+		const res = await fetch(`${handle.url}/api/workspace/check`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ path: WORKSPACE }),
+		});
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { exists: boolean };
+		expect(body.exists).toBe(true);
+	});
+
+	it("reports a missing folder as absent", async () => {
+		const handle = await start({ port: 0 });
+		const res = await fetch(`${handle.url}/api/workspace/check`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				path: join(tmpdir(), "dsh-ws-definitely-missing"),
+			}),
+		});
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { exists: boolean };
+		expect(body.exists).toBe(false);
+	});
+});
+
 describe("websocket", () => {
 	it("upgrades and accepts a connection", async () => {
 		const handle = await start({ port: 0 });
