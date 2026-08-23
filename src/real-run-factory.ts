@@ -24,16 +24,18 @@
  *      run/canceled.
  *
  * This is the seam's production wiring: src/server.ts + the browser UI build
- * on the RunEvent vocabulary from run-factory.ts and work unchanged. The
- * scripted factory in run-factory.ts stays for the seam tests.
+ * on the RunEvent vocabulary from the shared protocol module
+ * (shared/protocol.ts, ticket #30) and work unchanged. The scripted factory
+ * in run-factory.ts stays for the seam tests.
  */
 import { randomUUID } from "node:crypto";
 import type { Context } from "@deepseek-ai/cordis";
 import type { Agent, AgentHandle } from "@deepseek-ai/dsh-agent";
 import { SessionId } from "@deepseek-ai/dsh-session";
 import type { SubagentResult, SubagentRun } from "@deepseek-ai/dsh-subagent";
+import type { LaneId, RunEvent } from "../shared/protocol.ts";
 import { convertLlmModels } from "./model-list.ts";
-import type { LaneId, RunEvent, StartRun } from "./run-factory.ts";
+import type { StartRun } from "./run-factory.ts";
 import { resolveWorkspace } from "./workspace.ts";
 
 /** The subagent provider that spawns in-process children (see the demos). */

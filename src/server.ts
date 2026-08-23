@@ -21,15 +21,11 @@ import { createServer, type Server } from "node:http";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import WebSocket, { type RawData, WebSocketServer } from "ws";
+import type { LaneId, RunEvent, RunRequest } from "../shared/protocol.ts";
+import { WS_PATH } from "../shared/protocol.ts";
 import type { ModelOption } from "./model-list.ts";
 import { resolveDefaults } from "./model-list.ts";
-import type {
-	LaneId,
-	RunEvent,
-	RunHandle,
-	RunRequest,
-	StartRun,
-} from "./run-factory.ts";
+import type { RunHandle, StartRun } from "./run-factory.ts";
 import type { WorkspaceOption } from "./workspace-list.ts";
 
 /** Re-export the dropdown option shape the /api/models endpoint serves. */
@@ -41,8 +37,8 @@ export type { WorkspaceOption } from "./workspace-list.ts";
 export const DEFAULT_HOST = "127.0.0.1";
 /** Default port the server listens on. */
 export const DEFAULT_PORT = 4173;
-/** WebSocket endpoint path. */
-export const WS_PATH = "/ws";
+/** WebSocket endpoint path (shared WebSocket contract, ticket #30). */
+export { WS_PATH } from "../shared/protocol.ts";
 
 /** Options for {@link startServer}. */
 export interface ServerOptions {

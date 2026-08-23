@@ -19,6 +19,7 @@
 		"types": ["node"]
 	},
 	"include": [
+		"shared/protocol.ts",
 		"src/boot.ts",
 		"examples/**/*.ts",
 		"src/run-factory.ts",
