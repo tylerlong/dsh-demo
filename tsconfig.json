@@ -20,8 +20,7 @@
 	},
 	"include": [
 		"src/boot.ts",
-		"src/index.ts",
-		"src/enhanced-flow.ts",
+		"examples/**/*.ts",
 		"src/run-factory.ts",
 		"src/real-run-factory.ts",
 		"src/workspace.ts",

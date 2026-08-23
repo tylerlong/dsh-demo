@@ -9,8 +9,8 @@
 	},
 	"packageManager": "pnpm@11.22.0",
 	"scripts": {
-		"demo": "tsx src/index.ts",
-		"enhanced": "tsx src/enhanced-flow.ts",
+		"demo": "tsx --expose-internals examples/index.ts",
+		"enhanced": "tsx --expose-internals examples/enhanced-flow.ts",
 		"serve": "tsx --expose-internals src/serve.ts",
 		"typecheck": "tsc --noEmit",
 		"test": "vitest run",

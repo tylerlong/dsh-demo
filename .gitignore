@@ -6,7 +6,11 @@ test-results/
 playwright-report/
 
 
+# Demo-only configuration, untracked from the product root.
+# The archived `examples/` demos resolve these from here; they are not product config.
+dsh-demo.config.json
+settings.yaml
+
 # Optional local overrides (only created if you point dsh-demo.config.json at them).
 .dsh-sessions/
 .credentials.yaml
-settings.yaml
