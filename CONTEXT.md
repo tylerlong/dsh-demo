@@ -1,6 +1,6 @@
 # harness-workflow
 
-A local web app that runs one submitted task on two AI models concurrently, in separate browser tabs, and streams both results live so they can be compared side by side.
+A local web app that runs one submitted task on two AI models concurrently so they can be compared side by side. A read-only session browser lists workspaces and their sessions from the shared DSH store; continuing a session resumes it rather than creating a new one.
 
 The `examples/` archive holds pre-product DSH-harness experiments — frozen reference snippets, each with its own boot copy — not part of `harness-workflow`.
 
@@ -16,8 +16,12 @@ _Avoid_: job, try, comparison, submission
 One side of the comparison: a model, the worker that performs the run's task on that model, and that worker's output.
 _Avoid_: column, panel, side
 
+**session**:
+A persisted conversation in the shared DSH store (owned by DSH web), labeled by its session id. Continuing a session resumes it rather than creating a new one: the primary agent inherits its saved context and the run's new turns append to the same session.
+_Avoid_: thread, chat, dialog
+
 **workspace**:
-A folder selected from the shared DSH workspace catalog (owned by DSH web); harness-workflow reads it read-only. It becomes the orchestrator's session cwd, and spawned workers inherit it. Considered read-only.
+The folder a session runs in, derived from the resumed session's cwd (from its header) rather than chosen in the form. harness-workflow reads the shared DSH workspace catalog (owned by DSH web) read-only. It becomes the orchestrator's session cwd, and spawned workers inherit it. Considered read-only.
 _Avoid_: project folder, working directory, cwd
 
 **worker**:

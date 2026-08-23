@@ -1,14 +1,16 @@
 # harness-workflow
 
-A local web app that runs one submitted task on two AI models concurrently and streams both results live so they can be compared side by side. Each run spans two **lanes** (one model per lane) over a **workspace** chosen from the shared DSH workspace catalog.
+A local web app that runs one submitted task on two AI models concurrently so they can be compared side by side. Each run continues a **session** from the shared DSH store and spans two **lanes** (one model per lane) over the resumed session's **workspace**.
 
 [`examples/`](examples/README.md) holds archived pre-product DSH-harness demo scripts (each with its own frozen boot copy and the legacy `dsh-demo` name); they are not part of `harness-workflow`.
 
 ## What it does
 
-- **Two models, one task, side by side.** Submit a task; the **primary model** drives a run that spawns one read-only worker per lane on its lane's model. Both lanes stream text/tool output live, so you watch the same task run on two models at once and compare.
-- **Per-tab runs.** Each browser tab owns its run; a submit carries the task, the primary model, the two lane models, and the chosen workspace. Closing or refreshing a tab cancels only that tab's run.
-- **Workspace from the shared catalog.** The workspace dropdown is seeded from the shared DSH workspace catalog (owned by DSH web), read read-only; the run's orchestrator gets that folder as its session cwd and workers inherit it. See ADR-0003.
+- **Session browser.** The left panel lists workspaces from the shared DSH store, each expandable to its sessions (labeled by session id — the only stable label the read-only listing provides). It is read-only, loaded once on page load, never auto-reloaded; the latest session is preselected and the selected row is highlighted.
+- **Continue, don't restart.** Clicking a session opens it in the right panel; submitting resumes that session — the primary agent inherits its saved context and the run's new turns append to the same session. The task field starts empty; submit is disabled until a session is selected.
+- **Two models, one task, side by side.** The **primary model** drives a run that spawns one read-only worker per lane on its lane's model. Both lanes' output is read from the store (a recent ~100-line window) with live pushes, so you watch the same task run on two models at once and compare.
+- **Workspace from the resumed session.** The workspace is the resumed session's cwd (from its header), not a form selection — the workspace dropdown is removed. The shared DSH workspace catalog is still read read-only. See ADR-0003 and ADR-0006.
+- **Per-run cancel with concurrent runs.** Cancel aborts only the viewed session's run; other sessions keep running server-side in the store, and switching away and back is a fresh store read.
 - **No comparison summary.** The orchestrator coordinates the two workers and ends the run once both lanes settle; it never produces a summary.
 
 ## Run
@@ -34,12 +36,12 @@ pnpm dev          # runs the backend and the Vite dev server together
 
 | Path | Purpose |
 |---|---|
-| `src/server.ts` + `src/serve.ts` | **harness-workflow** — an HTTP + WebSocket server serving the built React frontend (`web/dist`) as a generic static file server, plus the `/api/models` and `/api/workspaces` endpoints. Model dropdowns populate at runtime from the harness's configured provider settings (`llm-pi-ai`); the workspace dropdown from the shared catalog. `pnpm serve`. |
+| `src/server.ts` + `src/serve.ts` | **harness-workflow** — an HTTP + WebSocket server serving the built React frontend (`web/dist`) as a generic static file server, plus the `/api/models` and `/api/sessions` endpoints. Model dropdowns populate at runtime from the harness's configured provider settings (`llm-pi-ai`); the session tree from the shared store. `pnpm serve`. |
 | `src/boot.ts` | Shared product boot: resolves the `@deepseek-ai/dsh-base` bundle, boots the tree via `boot()` with the `harness-workflow` identity, points bare-module resolution at the DSH monorepo's pnpm virtual store, and mounts the shared storage stack. |
 | `src/run-factory.ts` / `src/real-run-factory.ts` | The single run-factory seam: tests inject a scripted fake; `serve.ts` wires the harness-backed factory. |
-| `src/model-list.ts`, `src/workspace-list.ts`, `src/harness-adapters.ts`, `src/workspace.ts` | Adapters from the harness's llm registry / shared workspace registry to the UI dropdown rows, the typed context wiring, and workspace resolution. |
+| `src/model-list.ts`, `src/session-tree.ts`, `src/harness-adapters.ts`, `src/workspace.ts` | Adapters from the harness's llm registry / shared workspace registry and session store to the UI rows (the read-only workspace→session tree), the typed context wiring, and workspace resolution. |
 | `shared/protocol.ts` | The one shared WebSocket contract (run request shape, run event union, lane identity, WS path constant), imported by both the server and the client so the contract cannot drift. |
-| `web/` | The TypeScript + Vite + React single-page application: the app shell, the run configuration form, model and workspace selectors, the lane component, and the `useRun` lifecycle hook. Styled with Tailwind. |
+| `web/` | The TypeScript + Vite + React single-page application: the app shell, the read-only session browser (left panel: workspace→session tree), the run configuration form and transcript (right panel), model selectors, the lane component, and the `useRun` lifecycle hook. Styled with Tailwind. |
 | `root.cordis.yml` | Empty plugin list — the tree is composed purely from the base bundle patches. |
 | `storage.cordis.patch.yml` | The overlay that mounts the shared storage stack for the workspace catalog. |
 | `examples/` | Archived pre-product DSH-harness demo scripts — see [`examples/README.md`](examples/README.md). |
@@ -47,4 +49,4 @@ pnpm dev          # runs the backend and the Vite dev server together
 ## Docs
 
 - `CONTEXT.md` — the product's domain vocabulary.
-- `docs/adr/` — recorded decisions (ADR-0001 transport & run model, ADR-0002 workspace as the orchestrator's session cwd, ADR-0003 shared workspace catalog, ADR-0004 the codebase simplification, ADR-0005 the frontend rewrite).
+- `docs/adr/` — recorded decisions (ADR-0001 transport & run model, ADR-0002 workspace as the orchestrator's session cwd, ADR-0003 shared workspace catalog, ADR-0004 the codebase simplification, ADR-0005 the frontend rewrite, ADR-0006 the session browser and resume-not-create).
