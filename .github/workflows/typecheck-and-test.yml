@@ -6,16 +6,13 @@ on:
 
 jobs:
   typecheck-and-test:
-    # The Nexus registry (nexus3.int.rclabenv.com) is INTERNAL — only reachable
-    # on the corporate network. A GitHub-hosted (ubuntu-latest) runner cannot
-    # reach it, so this job runs on a self-hosted runner that is on the
-    # internal network. Label the runner accordingly (e.g. "self-hosted").
-    runs-on: [self-hosted]
-
-    env:
-      # Must be set BEFORE pnpm install so deps resolve from the published
-      # @deepseek-ai packages on the internal registry, not local link: paths.
-      COREPACK_NPM_REGISTRY: https://nexus3.int.rclabenv.com/repository/npm-all/
+    # Dependencies resolve from the PUBLIC npm registry (the @deepseek-ai
+    # packages are published there), so a GitHub-hosted runner with internet
+    # access works. No COREPACK_NPM_REGISTRY override here: that env var is
+    # only needed on machines whose network blocks the public registry (e.g.
+    # the corporate intranet), and CI must NOT point at an intranet-only
+    # Nexus endpoint.
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
