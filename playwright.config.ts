@@ -1,7 +1,7 @@
 import { defineConfig } from "@playwright/test";
 
 /**
- * dsh-compare end-to-end tests.
+ * harness-workflow end-to-end tests.
  *
  * The webServer boots the REAL app (pnpm serve → the harness-backed server on
  * 127.0.0.1:4173), so these tests exercise the actual product: page shell,

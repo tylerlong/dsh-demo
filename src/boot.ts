@@ -1,7 +1,7 @@
 /**
- * boot.ts — shared standalone boot for the dsh-compare server.
+ * boot.ts — shared standalone boot for the harness-workflow server.
  *
- * dsh-compare composes the full DSH harness tree itself through the public
+ * harness-workflow composes the full DSH harness tree itself through the public
  * `boot()` API from `@deepseek-ai/dsh-app-boot` instead of being a plugin
  * mounted by the `dsh` CLI. This is the server's only cross-cutting harness
  * dependency (see serve.ts).
@@ -20,7 +20,7 @@
  *   - provide `cmdlineArgs` + `appExit` (what the CLI would provide).
  *
  * Every location defaults to the SHARED harness home (`~/.dsh/settings.yaml`,
- * `~/.dsh/.credentials.yaml`, `~/.dsh/sessions`), so dsh-compare shares
+ * `~/.dsh/.credentials.yaml`, `~/.dsh/sessions`), so harness-workflow shares
  * settings, the session store, and the workspace catalog with DSH web.
  */
 import { readFileSync } from "node:fs";
@@ -75,8 +75,8 @@ export async function bootHarness(
 	};
 	const basePatch = join(baseDir, baseManifest.dsh.bundle.patch);
 	const patches = [
-		...loadOverlayPatches("dsh-demo", basePatch),
-		...loadOverlayPatches("dsh-demo", STORAGE_PATCH_PATH),
+		...loadOverlayPatches("harness-workflow", basePatch),
+		...loadOverlayPatches("harness-workflow", STORAGE_PATCH_PATH),
 	];
 
 	// Resolve every bare `@deepseek-ai/*` plugin specifier from the DSH
@@ -88,7 +88,7 @@ export async function bootHarness(
 
 	let ctx: Context | undefined;
 	const tree = await boot(
-		"dsh-demo",
+		"harness-workflow",
 		ROOT_CONFIG_PATH,
 		patches,
 		(host) => {

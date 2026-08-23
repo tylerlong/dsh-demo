@@ -10,7 +10,7 @@
  * timestamp, derived from the shared session store
  * (`ctx.sessionPersistence`).
  *
- * dsh-compare is read-only over both: it only calls `registry.list()` and
+ * harness-workflow is read-only over both: it only calls `registry.list()` and
  * `sessionPersistence.list()`, never a mutation (no create / delete /
  * insertBefore / attachSession / setTitle / archiveSession — DSH web owns the
  * catalog). Keeping the harness vocabulary (Workspace / SessionHeader) here,

@@ -268,7 +268,7 @@ export function createRunFactory(ctx: Context): StartRun {
 			}
 		})();
 		void flow.catch((error) => {
-			console.error(`dsh-compare: run ${runId} failed: ${messageOf(error)}`);
+			console.error(`harness-workflow: run ${runId} failed: ${messageOf(error)}`);
 		});
 
 		emit({ type: "run/started", runId });

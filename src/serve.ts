@@ -1,5 +1,5 @@
 /**
- * serve.ts — run the dsh-compare server against the real harness.
+ * serve.ts — run the harness-workflow server against the real harness.
  *
  * Boots the shared harness tree (src/boot.ts) and starts the HTTP + WebSocket
  * server (src/server.ts), wiring the /api/models dropdown source to the
@@ -10,7 +10,7 @@
  * real orchestration end to end (ticket #5).
  *
  * Run:  pnpm serve
- * Port: DSH_COMPARE_PORT env, default 4173.
+ * Port: HARNESS_WORKFLOW_PORT env, default 4173.
  */
 import { bootHarness } from "./boot.ts";
 import {
@@ -20,8 +20,8 @@ import {
 import { createRunFactory } from "./real-run-factory.ts";
 import { startServer } from "./server.ts";
 
-/** Port for the server; override with DSH_COMPARE_PORT. */
-const PORT = Number(process.env.DSH_COMPARE_PORT ?? 4173);
+/** Port for the server; override with HARNESS_WORKFLOW_PORT. */
+const PORT = Number(process.env.HARNESS_WORKFLOW_PORT ?? 4173);
 
 try {
 	const ctx = await bootHarness();
@@ -38,7 +38,7 @@ try {
 	});
 
 	const shutdown = async (signal: string): Promise<void> => {
-		console.log(`dsh-compare: received ${signal}, shutting down`);
+		console.log(`harness-workflow: received ${signal}, shutting down`);
 		await handle.close();
 		await ctx.fiber.dispose();
 		process.exit(0);
@@ -51,7 +51,7 @@ try {
 	});
 } catch (error) {
 	console.error(
-		`dsh-compare: ${error instanceof Error ? error.message : error}`,
+		`harness-workflow: ${error instanceof Error ? error.message : error}`,
 	);
 	process.exit(1);
 }

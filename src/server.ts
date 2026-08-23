@@ -1,5 +1,5 @@
 /**
- * server.ts — the dsh-compare HTTP + WebSocket server and static UI shell.
+ * server.ts — the harness-workflow HTTP + WebSocket server and static UI shell.
  *
  * A Node http server bound to 127.0.0.1 on a configurable port (default 4173)
  * that serves the static page and upgrades to WebSocket. The page shell is a
@@ -77,7 +77,7 @@ export interface ServerOptions {
 	readonly startRun?: StartRun;
 }
 
-/** A running dsh-compare server. */
+/** A running harness-workflow server. */
 export interface ServerHandle {
 	/** Bound host. */
 	readonly host: string;
@@ -116,7 +116,7 @@ async function readAsset(file: string): Promise<Buffer | undefined> {
 }
 
 /**
- * Start the dsh-compare server: bind, serve the static page and /api/models,
+ * Start the harness-workflow server: bind, serve the static page and /api/models,
  * and accept WebSocket connections. Resolves once the server is listening.
  */
 export async function startServer(
@@ -149,7 +149,7 @@ export async function startServer(
 	const url = `http://${host}:${boundPort}`;
 	const wsUrl = `ws://${host}:${boundPort}${WS_PATH}`;
 	// The server prints its URL so a user knows where to open the tab.
-	console.log(`dsh-compare listening at ${url}`);
+	console.log(`harness-workflow listening at ${url}`);
 
 	return {
 		host,
@@ -206,7 +206,7 @@ function handleConnection(ws: WebSocket, options: ServerOptions): void {
 		if (event.type === "lane/worker/error") {
 			// The reason is for the server console only, never the UI.
 			console.error(
-				`dsh-compare: lane ${event.laneId} worker error: ${event.reason}`,
+				`harness-workflow: lane ${event.laneId} worker error: ${event.reason}`,
 			);
 			// Strip the reason from the wire: the lane just shows its error chip.
 			sendEvent(ws, { type: "lane/worker/error", laneId: event.laneId });
@@ -228,14 +228,14 @@ function handleConnection(ws: WebSocket, options: ServerOptions): void {
 			if (current !== undefined) {
 				// One run per connection; a submit mid-run is ignored.
 				console.error(
-					"dsh-compare: submit ignored — a run is already active on this tab",
+					"harness-workflow: submit ignored — a run is already active on this tab",
 				);
 				return;
 			}
 			if (options.startRun === undefined) {
 				// Absent until ticket #5 wires the harness-backed factory.
 				console.error(
-					"dsh-compare: no run factory wired (ticket #5); submit ignored",
+					"harness-workflow: no run factory wired (ticket #5); submit ignored",
 				);
 				return;
 			}

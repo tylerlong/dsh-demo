@@ -1,5 +1,5 @@
 {
-	"name": "@dsh-demo/scripts",
+	"name": "harness-workflow",
 	"version": "0.1.0",
 	"private": true,
 	"type": "module",

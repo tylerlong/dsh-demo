@@ -1,5 +1,5 @@
 /**
- * server.test.ts — external-behavior tests for the dsh-compare server.
+ * server.test.ts — external-behavior tests for the harness-workflow server.
  *
  * The server is a plain Node http server that serves the static page, exposes
  * the harness-configured model list via /api/models, and upgrades to
@@ -327,7 +327,7 @@ describe("ws run lifecycle", () => {
 		ws.on("message", (data) => received.push(parse<RunEvent>(data)));
 		try {
 			const request = baseRequest("haiku");
-			request.workspace = "/nonexistent/dsh-compare-workspace";
+			request.workspace = "/nonexistent/harness-workflow-workspace";
 			sendJson(ws, submitMessage(request));
 			await waitFor(received, (e) => e.type === "run/started");
 
@@ -350,7 +350,7 @@ describe("ws run lifecycle", () => {
 			});
 			// The run never spawned a worker.
 			expect(factory.lastRun?.request.workspace).toBe(
-				"/nonexistent/dsh-compare-workspace",
+				"/nonexistent/harness-workflow-workspace",
 			);
 		} finally {
 			ws.close();

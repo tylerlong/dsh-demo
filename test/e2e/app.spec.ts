@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 /**
- * dsh-compare end-to-end tests against the real server (see playwright.config.ts).
+ * harness-workflow end-to-end tests against the real server (see playwright.config.ts).
  *
  * These pin the actual browser experience: the page must load without console
  * errors, the WebSocket must connect, the model dropdowns must populate from

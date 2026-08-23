@@ -1,5 +1,5 @@
 /**
- * run-factory.ts — the single run-factory seam for dsh-compare.
+ * run-factory.ts — the single run-factory seam for harness-workflow.
  *
  * The server (ticket #3) depends on this injected run factory to start a
  * comparison run and receive its live events. Production wires the seam to

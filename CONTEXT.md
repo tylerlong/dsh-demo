@@ -1,6 +1,8 @@
-# dsh-compare
+# harness-workflow
 
 A local web app that runs one submitted task on two AI models concurrently, in separate browser tabs, and streams both results live so they can be compared side by side.
+
+The `examples/` archive holds pre-product DSH-harness experiments — frozen reference snippets, each with its own boot copy — not part of `harness-workflow`.
 
 ## Language
 
@@ -13,7 +15,7 @@ One side of the comparison: a model, the worker that performs the run's task on 
 _Avoid_: column, panel, side
 
 **workspace**:
-A folder selected from the shared DSH workspace catalog (owned by DSH web); dsh-compare reads it read-only. It becomes the orchestrator's session cwd, and spawned workers inherit it. Considered read-only.
+A folder selected from the shared DSH workspace catalog (owned by DSH web); harness-workflow reads it read-only. It becomes the orchestrator's session cwd, and spawned workers inherit it. Considered read-only.
 _Avoid_: project folder, working directory, cwd
 
 **worker**:
@@ -24,5 +26,5 @@ _Avoid_: task agent, sub-task, helper
 The primary agent for a run: it spawns and coordinates the two workers and waits for both to settle. It does not produce a comparison summary.
 _Avoid_: coordinator, manager, driver
 
-**dsh-compare**:
+**harness-workflow**:
 The app's name. Use it when referring to the whole local web application rather than a single run.

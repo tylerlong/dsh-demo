@@ -1,202 +1,41 @@
-# dsh-demo — DeepSeek Harness as standalone scripts
+# harness-workflow
 
-Drives the DeepSeek Harness (DSH) from two plain Node scripts instead of
-browser tabs or the `dsh` CLI, exercising per-agent model routing and subagent
-orchestration. Both scripts are **standalone**: no Cordis plugin shape, no
-`dsh --profile`, no profile directory. They boot their own harness tree and,
-**by default, share the harness home** (`~/.dsh/settings.yaml`,
-`~/.dsh/.credentials.yaml`, `~/.dsh/sessions`) — so the DSH web sees your
-session history. An optional **`dsh-demo.config.json`** redirects any of those
-locations to project-local paths.
+A local web app that runs one submitted task on two AI models concurrently and streams both results live so they can be compared side by side. Each run spans two **lanes** (one model per lane) over a **workspace** chosen from the shared DSH workspace catalog.
 
-## The demo workflow (exactly as specified)
+[`examples/`](examples/README.md) holds archived pre-product DSH-harness demo scripts (each with its own frozen boot copy and the legacy `dsh-demo` name); they are not part of `harness-workflow`.
 
-```
-primary agent  (deepseek/deepseek-v4-flash-0731, openrouter)
-   │
-   ├─ starts agent A (openai/gpt-5.6-luna, openrouter)
-   │     → generates a random integer 1–100 (via a real random source)
-   │     → returns it to the primary
-   │
-   ├─ deterministic branch on parity (script logic, not an LLM decision)
-   │
-   ├─ odd  → starts agent B (deepseek/deepseek-v4-flash-0731)
-   │          computes n × 9  → writes b.txt in the project folder
-   │
-   └─ even → starts agent C (openai/gpt-5.6-luna)
-               computes n × 10 → writes c.txt in the project folder
+## What it does
+
+- **Two models, one task, side by side.** Submit a task; the **primary model** drives a run that spawns one read-only worker per lane on its lane's model. Both lanes stream text/tool output live, so you watch the same task run on two models at once and compare.
+- **Per-tab runs.** Each browser tab owns its run; a submit carries the task, the primary model, the two lane models, and the chosen workspace. Closing or refreshing a tab cancels only that tab's run.
+- **Workspace from the shared catalog.** The workspace dropdown is seeded from the shared DSH workspace catalog (owned by DSH web), read read-only; the run's orchestrator gets that folder as its session cwd and workers inherit it. See ADR-0003.
+- **No comparison summary.** The orchestrator coordinates the two workers and ends the run once both lanes settle; it never produces a summary.
+
+## Run
+
+```sh
+pnpm install      # once — installs @deepseek-ai/* against the DSH monorepo
+pnpm serve        # boots the harness and serves the UI
 ```
 
-The primary agent then receives the result and confirms the written file, so
-"primary agent gets the result from agent A" holds in the DSH sense: A/B/C are
-all subagents of the primary, each on its own model.
+The server binds `127.0.0.1:4173` by default (override with `HARNESS_WORKFLOW_PORT`) and prints its URL — open it in a browser.
 
-## Files
+`pnpm serve` boots the **shared harness** (see `src/boot.ts`): it reads the shared harness home (`~/.dsh/settings.yaml`, `~/.dsh/.credentials.yaml`, `~/.dsh/sessions`) and resolves every `@deepseek-ai/*` plugin from the DSH monorepo's pnpm virtual store, so the product shares settings, the session store, and the workspace catalog with DSH web (see ADR-0003).
+
+## Project layout
 
 | Path | Purpose |
 |---|---|
-| `src/index.ts` | **Demo 1** — the script above: primary + A/B/C with per-agent `subagents.start('spawn', ...)` calls. `pnpm demo`. |
-| `src/enhanced-flow.ts` | **Demo 2** — generic "task + review loop". `pnpm enhanced`. |
-| `src/server.ts` + `src/serve.ts` | **dsh-compare** — an HTTP + WebSocket server bound to `127.0.0.1:4173` (override with `DSH_COMPARE_PORT`) serving a static comparison UI shell: a top section (task, primary model dropdown, Submit/Cancel, output) above two lanes (dropdown + output panel each). Model dropdowns populate at runtime from the harness's configured provider settings (`llm-pi-ai`). `pnpm serve`. |
-| `src/boot.ts` | Shared standalone boot: resolves the `@deepseek-ai/dsh-base` bundle, boots the tree via `boot()`, points bare-module resolution at the DSH monorepo's pnpm virtual store, and applies override patches from `dsh-demo.config.json`. |
-| `root.cordis.yml` | Empty plugin list — the tree is composed purely from the base bundle patches; it is the root include each script boots. |
-| `dsh-demo.config.json` | Optional location overrides (see below). Absent/empty → shared harness home defaults. |
-| `settings.yaml`, `.credentials.yaml`, `.dsh-sessions/` | Project-local overrides, **only** used when `dsh-demo.config.json` points at them. Gitignored. |
-| `package.json` | Published `@deepseek-ai/*` package deps (semver ranges), `tsx` SDK dev deps, `demo` / `enhanced` / `serve` scripts. |
-| `tsconfig.json` | Typecheck config (`pnpm typecheck`). |
+| `src/server.ts` + `src/serve.ts` | **harness-workflow** — an HTTP + WebSocket server serving a static comparison UI from `public/`: a top section (task, primary model dropdown, Submit/Cancel, output) above two lanes (dropdown + output panel each). Model dropdowns populate at runtime from the harness's configured provider settings (`llm-pi-ai`); the workspace dropdown from the shared catalog. `pnpm serve`. |
+| `src/boot.ts` | Shared product boot: resolves the `@deepseek-ai/dsh-base` bundle, boots the tree via `boot()` with the `harness-workflow` identity, points bare-module resolution at the DSH monorepo's pnpm virtual store, and mounts the shared storage stack. |
+| `src/run-factory.ts` / `src/real-run-factory.ts` | The single run-factory seam: tests inject a scripted fake; `serve.ts` wires the harness-backed factory. |
+| `src/model-list.ts`, `src/workspace-list.ts` | Adapters from the harness's llm registry / shared workspace registry to the UI dropdown rows. |
+| `public/` | Static UI assets (the document, stylesheet, and browser script) served from disk per request. |
+| `root.cordis.yml` | Empty plugin list — the tree is composed purely from the base bundle patches. |
+| `storage.cordis.patch.yml` | The overlay that mounts the shared storage stack for the workspace catalog. |
+| `examples/` | Archived pre-product DSH-harness demo scripts — see [`examples/README.md`](examples/README.md). |
 
-## How a standalone script boots
+## Docs
 
-Neither script is a plugin — there is no `name`/`inject`/`apply` export and no
-`cordis.patch.yml` mount. Each is a plain entry point that composes the tree
-itself via `src/boot.ts`:
-
-1. resolve the `@deepseek-ai/dsh-base` bundle from the DSH installation anchor
-   (its patch lists the full base plugin set: agents, sessions, llm-pi-ai
-   openrouter route, fs/bash/subagent tools, subagent service);
-2. load that bundle's overlay patches;
-3. read `dsh-demo.config.json`; for every key it sets, append an id-targeted
-   patch redirecting that harness-home read to the configured path. **With no
-   config, no patches are appended** — every location keeps its base-bundle
-   default, which is the shared harness home;
-4. call `boot("...", root.cordis.yml, patches, prepare)` — the public API
-   `@deepseek-ai/dsh-app-boot` exports for exactly this kind of embedding;
-   with `bareModuleBaseUrl` pointed at the DSH monorepo's
-   `node_modules/.pnpm/node_modules`, every bare `@deepseek-ai/*` specifier
-   resolves from the installation's own virtual store — no profile directory,
-   no home flat fallback;
-5. provide `cmdlineArgs` + `appExit` (the same host values the CLI would).
-
-Then the script drives `agents` / `sessions` / `subagents` straight off the
-returned context, exactly like the driver plugin did — only now it owns the
-boot and exit itself.
-
-## Location overrides (`dsh-demo.config.json`)
-
-Every key is optional; an absent key (or absent file) keeps the shared
-harness-home default. Paths resolve relative to the project root.
-
-| Key | Default (shared) | Override example |
-|---|---|---|
-| `settingsPath` | `~/.dsh/settings.yaml` | `"./settings.yaml"` |
-| `credentialsPath` | `~/.dsh/.credentials.yaml` | `"./.credentials.yaml"` |
-| `sessionsRoot` | `~/.dsh/sessions` | `"./.dsh-sessions"` |
-| `dshHome` | `~/.dsh` | `"."` |
-
-Example — fully project-local:
-
-```json
-{
-  "settingsPath": "./settings.yaml",
-  "credentialsPath": "./.credentials.yaml",
-  "sessionsRoot": "./.dsh-sessions"
-}
-```
-
-With this set, the scripts read/write only the project (settings + key +
-sessions local, so the web does **not** see those runs). With the file absent
-or empty, they share the harness home (settings + key + sessions shared, so
-the web **does** see the runs).
-
-## Demo 1 — `src/index.ts`
-
-```bash
-cd /Users/tyler.liu/src/ai/dsh-demo
-pnpm demo     # = tsx src/index.ts
-```
-
-## Demo 2 — `src/enhanced-flow.ts` (task + review loop)
-
-A task-agnostic driven loop (e.g. review a document, then close the loop on
-feedback). The **task is user input** — never hardcoded, never from config or
-env. The task + requirements come from the user at runtime, one of two ways:
-
-- **an input file** given as the first non-flag CLI argument — line 1: task,
-  line 2: requirements (works non-interactively, e.g. piped/scripted runs);
-- **an interactive prompt** on stdin (`TASK:` / `REQUIREMENTS:`), only when
-  stdin is a real terminal; on a pipe/redirect (non-TTY) with no input file it
-  throws a clear error instead of hanging.
-
-Then:
-
-1. The **primary** agent (default `deepseek/deepseek-v4-flash-0731`) does the
-   task from the resolved task + requirements and writes artifacts to
-   `outputDir`.
-2. A **brand-new reviewer** sub-agent (default `openai/gpt-5.6-luna`, fresh
-   `spawn` — no access to the primary's context/logs of *how* it worked) gets
-   the same task + requirements + the final artifacts, and returns structured
-   feedback (`{"feedbacks": [{issue, suggestion}]}`). It is restricted to
-   read-only tools (`read`, `read_image`, `glob`, `grep`) and never redoes the
-   task.
-3. The **primary adjudicates** each feedback (accept → fix/adjust the
-   artifacts with write/edit; reject → keep as-is) and replies with one
-   machine-parseable line `{"accepted": [ids], "rejected": [ids]}`.
-4. If any feedback was accepted, the loop **restarts with a brand-new
-   reviewer** against the fixed artifacts; it stops when the reviewer has no
-   feedback or every feedback was rejected.
-
-Loop control, per-agent models, and context isolation are code-level concerns.
-Optional CLI flags (everything has a default):
-
-| Flag | Meaning | Default |
-|---|---|---|
-| `[input-file]` | first non-flag arg: line 1 = task, line 2 = requirements | interactive prompt (TTY) |
-| `--output-dir DIR` | where the primary writes artifacts and reviewers inspect | `process.cwd()` |
-| `--max-rounds N` | safety cap on review rounds | `5` |
-| `--timeout-ms N` | abort the run after N ms (none by default) | none |
-| `--primary-model M` | model for the primary agent | `deepseek/deepseek-v4-flash-0731` |
-| `--reviewer-model M` | model for every reviewer | `openai/gpt-5.6-luna` |
-
-```bash
-cd /Users/tyler.liu/src/ai/dsh-demo
-# non-interactive: task from an input file (line 1: task, line 2: requirements)
-printf 'Write a haiku about the sea into a file named poem.txt\nmust follow 5-7-5 and contain "waves"\n' > /tmp/task.txt
-pnpm enhanced /tmp/task.txt --output-dir /tmp/enhanced-demo --max-rounds 3 --timeout-ms 300000
-# interactive (real terminal): the script asks "TASK:" / "REQUIREMENTS:"
-pnpm enhanced
-```
-
-## Realtime output & timeouts
-
-- **Realtime progress** — each script subscribes to the live `session/event`
-  firehose (filtered to each agent's session) and prints the token stream as
-  it happens, prefixed per agent, plus `→ tool bash` lines each time the agent
-  calls a tool.
-- **Timeout** (enhanced) — pass `--timeout-ms N` and the run is given an
-  `AbortSignal.timeout(...)` shared by every agent; on expiry the active child
-  is cancelled and the script exits `1` with a clear message instead of
-  hanging.
-
-## Verified results
-
-- **Demo 1** odd: random 63 → agent B computed `63 × 9 = 567` → `b.txt` =
-  `567`; primary confirmed the file. Also 45→405, 47→423, 57→513, 73→657 on
-  earlier runs. Even: 50→500, 44→440 (→ `c.txt`). Process exits 0.
-- **Demo 2** (input file + `--max-rounds 3`): primary wrote
-  `/tmp/enhanced-demo/poem.txt`; reviewer returned no feedback → "converged",
-  exit 0.
-- Non-TTY run of `pnpm enhanced` with no input file errors cleanly (exit 1) —
-  no hang.
-
-## Notes / gotchas found along the way
-
-- `structured_output` is the child's structured-result tool; the prompt MUST
-  explicitly demand calling it, or the model answers in plain text and the
-  child is scored `error` (no captured value).
-- LLMs are bad at "pick a random number" (a tiny biased set like {47,57,73}
-  comes back). Agent A is therefore told to run
-  `node -e "console.log(Math.floor(Math.random()*100)+1)"` via the bash tool —
-  still the subagent generating the number, but genuinely random.
-- Each child run must be `dispose()`d after settling, or the child keeps the
-  process alive past the force-exit.
-- The scripts boot their own tree via `boot()` and own `process.exit`; the
-  `appExit`/`cmdlineArgs` host values are provided by `provideCmdline` in
-  `src/boot.ts`, not by the CLI.
-- Relative imports use the `.ts` extension (tsx at runtime needs it), so
-  `tsconfig.json` sets `allowImportingTsExtensions` (fine under `noEmit`).
-- The OpenRouter key resolves through `apiKeyEnv: OPENROUTER_API_KEY` from the
-  credentials store — by default `~/.dsh/.credentials.yaml` (shared, so the
-  web and the scripts use the same key); if `dsh-demo.config.json` sets
-  `credentialsPath`, it resolves from that project-local file instead. To
-  rotate the key, edit the store (or set `OPENROUTER_API_KEY` in the process
-  env, which wins).
+- `CONTEXT.md` — the product's domain vocabulary.
+- `docs/adr/` — recorded decisions (ADR-0001 transport & run model, ADR-0002 workspace as the orchestrator's session cwd, ADR-0003 shared workspace catalog, ADR-0004 the codebase simplification).

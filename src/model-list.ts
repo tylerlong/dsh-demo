@@ -1,5 +1,5 @@
 /**
- * model-list.ts — the harness-model seam for the dsh-compare dropdowns.
+ * model-list.ts — the harness-model seam for the harness-workflow dropdowns.
  *
  * The three model dropdowns (primary, left lane, right lane) are populated at
  * runtime from the harness's configured provider settings (the llm-pi-ai
