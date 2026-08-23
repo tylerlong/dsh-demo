@@ -1,6 +1,15 @@
 import { expect, test } from "@playwright/test";
 
 /**
+ * The localforage UMD global is injected by the served /vendor/localforage.js
+ * script. The declared shape is the subset these tests use; the evaluate
+ * callbacks below resolve it from the browser global scope at runtime.
+ */
+declare const localforage: {
+	setItem(key: string, value: string): Promise<string>;
+};
+
+/**
  * dsh-compare end-to-end tests against the real server (see playwright.config.ts).
  *
  * These pin the actual browser experience: the page must load without console
@@ -61,6 +70,38 @@ test("page loads, WS connects, dropdowns populate, workspace input, no console e
 	// fail here (regression: the inline script must parse; the localforage UMD
 	// build must also load without throwing).
 	expect(errors).toEqual([]);
+});
+
+test("remembered workspace is restored on load when the folder exists", async ({
+	page,
+}) => {
+	await page.goto("/");
+	await expect(page.locator("#conn-status")).toHaveText("connected", {
+		timeout: 15_000,
+	});
+
+	// Seed the remembered value, then reload so the page restores it.
+	await page.evaluate((w) => localforage.setItem("workspace", w), WORKSPACE);
+	await page.reload();
+	await expect(page.locator("#workspace")).toHaveValue(WORKSPACE);
+	await expect(page.locator("#submit")).toBeEnabled();
+});
+
+test("remembered workspace is cleared on load when the folder is missing", async ({
+	page,
+}) => {
+	await page.goto("/");
+	await expect(page.locator("#conn-status")).toHaveText("connected", {
+		timeout: 15_000,
+	});
+
+	// Seed a stale path, then reload: the page must NOT restore it and must
+	// clear it, leaving the input empty and submit disabled.
+	const missing = "/definitely/not/a/real/workspace/path";
+	await page.evaluate((w) => localforage.setItem("workspace", w), missing);
+	await page.reload();
+	await expect(page.locator("#workspace")).toHaveValue("");
+	await expect(page.locator("#submit")).toBeDisabled();
 });
 
 test("submit runs the full comparison: both lanes done, no summary, inputs unlock", async ({
