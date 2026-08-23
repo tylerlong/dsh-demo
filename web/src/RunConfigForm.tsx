@@ -10,9 +10,10 @@
  *
  * The run lifecycle — wiring submit/cancel to the WebSocket and locking the
  * inputs while a run is active — is ticket #33. This form only renders and
- * loads, and exposes the two seams #33 builds on: an optional `onSubmit`
- * receiving the assembled run request (the shared protocol shape, ticket #30)
- * and an optional `locked` flag that disables the inputs and arms Cancel.
+ * loads, and exposes the three seams #33 builds on: an optional `onSubmit`
+ * receiving the assembled run request (the shared protocol shape, ticket #30),
+ * an optional `onCancel` invoked by the Cancel button, and an optional
+ * `locked` flag that disables the inputs and arms Cancel.
  */
 import { useEffect, useRef, useState } from "react";
 import type { RunRequest } from "../../shared/protocol.ts";
@@ -47,6 +48,11 @@ export interface RunConfigFormProps {
 	 * until the run lifecycle (ticket #33) wires it.
 	 */
 	readonly onSubmit?: (request: RunRequest) => void;
+	/**
+	 * Called when the user clicks Cancel. Wired by the run lifecycle (ticket
+	 * #33) to abort the active run; the button is armed only while locked.
+	 */
+	readonly onCancel?: () => void;
 }
 
 /** The form's data-loading phase: inputs stay disabled until ready. */
@@ -78,6 +84,7 @@ export function RunConfigForm({
 	loadWorkspaces = fetchWorkspaces,
 	locked = false,
 	onSubmit,
+	onCancel,
 }: RunConfigFormProps) {
 	const [loadState, setLoadState] = useState<LoadState>("loading");
 	const [models, setModels] = useState<readonly ModelOption[]>([]);
@@ -199,6 +206,7 @@ export function RunConfigForm({
 					id="cancel"
 					type="button"
 					disabled={!locked}
+					onClick={onCancel}
 					className="rounded-md border border-slate-300 bg-gray-600 px-4 py-2 text-white disabled:cursor-not-allowed disabled:opacity-50"
 				>
 					Cancel

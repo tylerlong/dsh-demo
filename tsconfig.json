@@ -46,10 +46,14 @@
 		"web/src/ModelSelect.tsx",
 		"web/src/WorkspaceSelect.tsx",
 		"web/src/RunConfigForm.tsx",
+		"web/src/Lane.tsx",
+		"web/src/useRun.ts",
 		"web/src/test-setup.ts",
 		"web/src/ModelSelect.test.tsx",
 		"web/src/WorkspaceSelect.test.tsx",
 		"web/src/RunConfigForm.test.tsx",
+		"web/src/Lane.test.tsx",
+		"web/src/useRun.test.tsx",
 		"web/src/vite-env.d.ts"
 	]
 }
