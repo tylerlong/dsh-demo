@@ -7,15 +7,11 @@
  * boundary (HTTP + WebSocket), injecting a fixed model list instead of booting
  * the harness. The run lifecycle (submit/cancel over the socket) is ticket #4.
  */
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "vite";
 import {
 	afterEach,
 	beforeAll,
-	beforeEach,
 	describe,
 	expect,
 	it,
@@ -109,7 +105,6 @@ async function start(
 
 afterEach(async () => {
 	await Promise.all(live.splice(0).map((handle) => handle.close()));
-	if (WORKSPACE !== "") rmSync(WORKSPACE, { recursive: true, force: true });
 });
 
 describe("server boot", () => {
@@ -210,7 +205,7 @@ describe("obsolete workspace check route", () => {
 		const res = await fetch(`${handle.url}/api/workspace/check`, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ path: WORKSPACE }),
+			body: JSON.stringify({ path: "/opt/whatever" }),
 		});
 		expect(res.status).toBe(404);
 	});
@@ -266,20 +261,9 @@ function baseRequest(task: string): RunRequest {
 			left: "deepseek/deepseek-v4-flash-0731",
 			right: "openai/gpt-5.6-luna",
 		},
-		workspace: WORKSPACE,
+		sessionId: "session-1",
 	};
 }
-
-/**
- * A valid existing folder used as every run workspace in this file; the
- * scripted fake factory requires the folder to exist. Recreated fresh before
- * each test so one run (or its cleanup) never leaves the next with a stale,
- * now-removed path.
- */
-let WORKSPACE = "";
-beforeEach(() => {
-	WORKSPACE = mkdtempSync(join(tmpdir(), "dsh-ws-"));
-});
 
 function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
@@ -338,7 +322,7 @@ describe("ws run lifecycle", () => {
 		}
 	});
 
-	it("an invalid workspace fails both lanes and ends the run before any worker starts", async () => {
+	it("submit carries the selected session id to the run factory", async () => {
 		const factory = createScriptedRunFactory();
 		const handle = await start({ port: 0, startRun: factory.startRun });
 		const ws = await connect(handle);
@@ -346,31 +330,13 @@ describe("ws run lifecycle", () => {
 		ws.on("message", (data) => received.push(parse<RunEvent>(data)));
 		try {
 			const request = baseRequest("haiku");
-			request.workspace = "/nonexistent/harness-workflow-workspace";
+			request.sessionId = "session-42";
 			sendJson(ws, submitMessage(request));
 			await waitFor(received, (e) => e.type === "run/started");
 
-			const leftError = (await waitFor(
-				received,
-				(e) => e.type === "lane/worker/error" && e.laneId === "left",
-			)) as { reason?: string };
-			const rightError = (await waitFor(
-				received,
-				(e) => e.type === "lane/worker/error" && e.laneId === "right",
-			)) as { reason?: string };
-			const done = await waitFor(received, (e) => e.type === "run/done");
-
-			// Both lanes error and the run ends; the reason stays server-side.
-			expect(leftError.reason).toBeUndefined();
-			expect(rightError.reason).toBeUndefined();
-			expect(done).toEqual({
-				type: "run/done",
-				runId: factory.lastRun?.handle.id,
-			});
-			// The run never spawned a worker.
-			expect(factory.lastRun?.request.workspace).toBe(
-				"/nonexistent/harness-workflow-workspace",
-			);
+			// The run continues the selected session: the factory receives the
+			// session id from the request (parent ticket #37).
+			expect(factory.lastRun?.request.sessionId).toBe("session-42");
 		} finally {
 			ws.close();
 		}

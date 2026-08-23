@@ -18,9 +18,6 @@
  * backend open, which would make the teardown's server.close() wait for it.
  */
 import { get as httpGet } from "node:http";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer as createViteServer, type ViteDevServer } from "vite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -66,9 +63,6 @@ const WORKSPACES: WorkspaceOption[] = [
 /** The frontend source root the dev server serves (web/). */
 const WEB_ROOT = fileURLToPath(new URL("../web", import.meta.url));
 
-/** A valid existing folder used as the run workspace (scripted fake requires it). */
-let WORKSPACE = "";
-
 let backend: ServerHandle;
 let vite: ViteDevServer;
 let vitePort = 0;
@@ -99,7 +93,6 @@ function getText(path: string): Promise<{ status: number; body: string }> {
 }
 
 beforeAll(async () => {
-	WORKSPACE = mkdtempSync(join(tmpdir(), "dsh-ws-"));
 	factory = createScriptedRunFactory();
 	backend = await startServer({
 		port: 0,
@@ -146,7 +139,6 @@ afterAll(async () => {
 	await vite.ws.close();
 	await new Promise<void>((resolve) => vite.httpServer?.close(() => resolve()));
 	await backend.close();
-	rmSync(WORKSPACE, { recursive: true, force: true });
 }, 30_000);
 
 describe("dev server origin", () => {
@@ -213,7 +205,7 @@ function baseRequest(task: string): RunRequest {
 			left: "deepseek/deepseek-v4-flash-0731",
 			right: "openai/gpt-5.6-luna",
 		},
-		workspace: WORKSPACE,
+		sessionId: "session-1",
 	};
 }
 

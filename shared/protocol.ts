@@ -26,11 +26,12 @@ export interface RunRequest {
 	/** The model each lane worker runs on. */
 	laneModels: Record<LaneId, string>;
 	/**
-	 * The workspace folder the run agents (orchestrator and both workers) may
-	 * read for context. A run whose workspace is not a valid folder fails
-	 * immediately: both lanes error and the run ends before any worker starts.
+	 * The session to resume (the selected session from the read-only session
+	 * browser). A run continues that session — inheriting its saved context
+	 * and appending its new turns to it — instead of starting from a fresh
+	 * workspace (parent ticket #37).
 	 */
-	workspace: string;
+	sessionId: string;
 }
 
 /** The run has been created and its event stream has begun. */

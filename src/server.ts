@@ -348,7 +348,7 @@ function isRunRequest(value: unknown): value is RunRequest {
 	return (
 		typeof value.task === "string" &&
 		typeof value.primaryModel === "string" &&
-		typeof value.workspace === "string" &&
+		typeof value.sessionId === "string" &&
 		isRecord(laneModels) &&
 		typeof laneModels.left === "string" &&
 		typeof laneModels.right === "string"

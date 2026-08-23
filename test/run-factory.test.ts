@@ -6,14 +6,11 @@
  * LLM call. The tests drive the fake exactly as the server (ticket #3) will
  * drive production injected startRun, so they pin the contract #3 builds on.
  *
- * New contract (parent ticket #9): a run carries a workspace, ends with
- * run/done as soon as both lanes settle, never emits run/summary, and an
- * invalid workspace fails immediately with both lanes erroring + run/done.
+ * New contract (parent ticket #37): a run carries the session to resume
+ * (sessionId), ends with run/done as soon as both lanes settle, and never
+ * emits run/summary.
  */
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createScriptedRunFactory } from "../src/run-factory.ts";
 
 const baseRequest = () => ({
@@ -23,35 +20,7 @@ const baseRequest = () => ({
 		left: "deepseek/deepseek-v4-flash-0731",
 		right: "openai/gpt-5.6-luna",
 	},
-	workspace: WS,
-});
-
-/** Existing folders opened this file; all removed after each test. */
-const tempDirs: string[] = [];
-afterEach(() => {
-	for (const dir of tempDirs.splice(0)) {
-		// Best-effort cleanup; a leftover temp dir is harmless.
-		try {
-			// eslint-disable-next-line @typescript-eslint/no-require-imports
-			rmSync(dir);
-		} catch {
-			/* ignore */
-		}
-	}
-});
-
-/** A brand-new existing folder, valid as a run workspace. */
-function freshWorkspace(): string {
-	const dir = mkdtempSync(join(tmpdir(), "dsh-ws-"));
-	tempDirs.push(dir);
-	return dir;
-}
-
-// A valid workspace reused as the default for baseRequest; refreshed per test
-// that cares (workspace presence is what the seam pins, not its contents).
-let WS = freshWorkspace();
-afterEach(() => {
-	WS = freshWorkspace();
+	sessionId: "session-1",
 });
 
 /** Grab the latest run or fail the test; the factory always has one here. */
@@ -120,11 +89,10 @@ describe("run-factory seam", () => {
 		expect(factory.runs[1]?.handle.id).toBe("1");
 	});
 
-	it("carries the run workspace in the request", () => {
+	it("carries the session to resume in the request", () => {
 		const factory = createScriptedRunFactory();
-		const ws = freshWorkspace();
-		factory.startRun({ ...baseRequest(), workspace: ws }, () => {});
-		expect(factory.lastRun?.request.workspace).toBe(ws);
+		factory.startRun({ ...baseRequest(), sessionId: "session-9" }, () => {});
+		expect(factory.lastRun?.request.sessionId).toBe("session-9");
 	});
 
 	it("emits run/done as soon as both lanes settle and never a run/summary", () => {
@@ -161,27 +129,18 @@ describe("run-factory seam", () => {
 		]);
 	});
 
-	it("an invalid workspace fails immediately: both lanes error and the run ends before any worker starts", () => {
+	it("a submitted run with any session id starts cleanly (no folder validation)", () => {
 		const factory = createScriptedRunFactory();
 		const received: Array<{ type: string; laneId?: string; reason?: string }> =
 			[];
 		const handle = factory.startRun(
-			{
-				...baseRequest(),
-				workspace: join(tmpdir(), "definitely-not-a-folder-xyz"),
-			},
+			{ ...baseRequest(), sessionId: "session-any" },
 			(event) => received.push(event),
 		);
 
-		// The run still has a handle, but both lanes errored and run/done ended it.
+		// The run starts with just run/started; nothing fails before workers.
 		expect(typeof handle.id).toBe("string");
-		const types = received.map((e) => e.type);
-		expect(types).toContain("lane/worker/error");
-		expect(types).toContain("run/done");
-		// No worker ever started: no lane/worker/started and no run/summary.
-		expect(types).not.toContain("lane/worker/started");
-		expect(types).not.toContain("run/summary");
-		const errors = received.filter((e) => e.type === "lane/worker/error");
-		expect(errors.length).toBe(2);
+		expect(received.map((e) => e.type)).toEqual(["run/started"]);
+		expect(factory.lastRun?.request.sessionId).toBe("session-any");
 	});
 });

@@ -5,23 +5,20 @@
  * subagents.start, session event watching, cancellation). These tests drive it
  * against a fake harness context — a fake llm registry, agent factory, and
  * subagent provider — so no real model call or harness boot is involved. They
- * pin the orchestration shape (orchestrator on the primary model with the run
- * workspace as its session cwd, two read-only workers on the lane models), the
- * event translation (session text deltas → lane/worker/delta, completion →
- * lane/worker/done, run/done once both lanes settle, cancel → run/canceled),
- * and the read-only tool filter.
+ * pin the orchestration shape (orchestrator on the primary model, two
+ * read-only workers on the lane models), the event translation (session text
+ * deltas → lane/worker/delta, completion → lane/worker/done, run/done once
+ * both lanes settle, cancel → run/canceled), and the read-only tool filter.
+ * The run request carries the session to resume (parent #37); the resume
+ * wiring itself lands in ticket #40.
  */
 
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { Context } from "@deepseek-ai/cordis";
 import type { AgentHandle } from "@deepseek-ai/dsh-agent";
 import type { SubagentResult, SubagentRun } from "@deepseek-ai/dsh-subagent";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createRunFactory, WORKER_TOOLS } from "../src/real-run-factory.ts";
 import type { RunEvent, RunRequest, StartRun } from "../src/run-factory.ts";
-import { resolveWorkspace } from "../src/workspace.ts";
 
 const MODELS = [
 	{
@@ -32,18 +29,7 @@ const MODELS = [
 	{ provider: "openrouter", id: "openai/gpt-5.6-luna", name: "GPT 5.6 Luna" },
 ];
 
-/** A workspace folder the run agents act on; a real dir, refreshed per test. */
-let WORKSPACE = "";
-beforeEach(() => {
-	WORKSPACE = mkdtempSync(join(tmpdir(), "dsh-ws-"));
-});
-afterEach(() => {
-	if (WORKSPACE !== "") {
-		rmSync(WORKSPACE, { recursive: true, force: true });
-	}
-});
-
-/** Build the default request against the current per-test workspace. */
+/** Build the default request: the run resumes the selected session (parent #37). */
 function baseRequest(overrides: Partial<RunRequest> = {}): RunRequest {
 	return {
 		task: "Compare the sea and the sky",
@@ -52,7 +38,7 @@ function baseRequest(overrides: Partial<RunRequest> = {}): RunRequest {
 			left: "deepseek/deepseek-v4-flash-0731",
 			right: "openai/gpt-5.6-luna",
 		},
-		workspace: WORKSPACE,
+		sessionId: "session-1",
 		...overrides,
 	};
 }
@@ -193,7 +179,7 @@ function startRun(
 }
 
 describe("real run factory", () => {
-	it("creates the orchestrator on the primary model (workspace cwd) and spawns two concurrent read-only workers", async () => {
+	it("creates the orchestrator on the primary model and spawns two concurrent read-only workers", async () => {
 		const harness = makeHarness();
 		const { events } = startRun(harness);
 		expect(events[0]).toEqual({
@@ -206,16 +192,9 @@ describe("real run factory", () => {
 
 		const createOpts = harness.created[0]?.opts as {
 			agentOptions: { provider: string; model: string };
-			meta: { cwd: string };
 		};
 		expect(createOpts.agentOptions.provider).toBe("openrouter");
 		expect(createOpts.agentOptions.model).toBe(baseRequest().primaryModel);
-		// The orchestrator session cwd is the canonical run workspace (parent #9).
-		expect(createOpts.meta).toEqual({
-			cwd: realpathSync(WORKSPACE),
-		});
-		// The validated workspace is the same canonical folder the factory used.
-		expect(resolveWorkspace(WORKSPACE)).toBe(realpathSync(WORKSPACE));
 
 		const calls = harness.spawned;
 		const toolFilters = calls.map(
@@ -235,13 +214,6 @@ describe("real run factory", () => {
 			[baseRequest().laneModels.left, baseRequest().laneModels.right].sort(),
 		);
 		expect(events.some((e) => e.type === "orchestrator/delta")).toBe(true);
-	});
-
-	it("rejects an empty or whitespace-only workspace (no implicit folder)", async () => {
-		// The resolver must not silently fall back to the server working
-		// directory (parent #9: an empty workspace is invalid).
-		expect(resolveWorkspace("")).toBeUndefined();
-		expect(resolveWorkspace("   ")).toBeUndefined();
 	});
 
 	it("routes worker session text deltas to the owning lane", async () => {
@@ -432,27 +404,22 @@ describe("real run factory", () => {
 		expect(events.some((e) => e.type === "run/started")).toBe(true);
 	});
 
-	it("an invalid workspace fails both lanes and ends the run before any worker spawns, with no orchestrator or summary", async () => {
+	it("a run with any session id starts and reaches done (no folder validation)", async () => {
+		// The workspace contract is gone: the request carries the session to
+		// resume (parent #37), and the run starts regardless of the id. The
+		// resume wiring itself (ctx.agents.resume) lands in ticket #40.
 		const harness = makeHarness();
 		const { events } = startRun(
 			harness,
-			baseRequest({
-				workspace: join(tmpdir(), "definitely-not-a-folder-xyz"),
-			}),
+			baseRequest({ sessionId: "session-7" }),
 		);
+		await waitUntil(() => harness.created.length === 1);
 
+		harness.spawned[0]?.settle({ output: [], stopReason: "completed" });
+		harness.spawned[1]?.settle({ output: [], stopReason: "completed" });
 		await waitUntil(() => events.some((e) => e.type === "run/done"));
 
-		// Both lanes errored and the run ended; no worker started, no
-		// orchestrator was created (no /run/summary either).
-		const errors = events.filter((e) => e.type === "lane/worker/error");
-		expect(errors.length).toBe(2);
-		expect(harness.created.length).toBe(0);
-		expect(harness.spawned.length).toBe(0);
-		expect(events.some((e) => e.type === "lane/worker/started")).toBe(false);
-		expect(
-			events.some((e) => (e as { type: string }).type === "run/summary"),
-		).toBe(false);
+		expect(events.some((e) => e.type === "run/started")).toBe(true);
 		expect(events.at(-1)).toEqual({
 			type: "run/done",
 			runId: expect.any(String),
