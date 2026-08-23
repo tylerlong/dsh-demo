@@ -303,6 +303,44 @@ describe("ws run lifecycle", () => {
 		}
 	});
 
+	it("an invalid workspace fails both lanes and ends the run before any worker starts", async () => {
+		const factory = createScriptedRunFactory();
+		const handle = await start({ port: 0, startRun: factory.startRun });
+		const ws = await connect(handle);
+		const received: RunEvent[] = [];
+		ws.on("message", (data) => received.push(parse<RunEvent>(data)));
+		try {
+			const request = baseRequest("haiku");
+			request.workspace = "/nonexistent/dsh-compare-workspace";
+			sendJson(ws, submitMessage(request));
+			await waitFor(received, (e) => e.type === "run/started");
+
+			const leftError = (await waitFor(
+				received,
+				(e) => e.type === "lane/worker/error" && e.laneId === "left",
+			)) as { reason?: string };
+			const rightError = (await waitFor(
+				received,
+				(e) => e.type === "lane/worker/error" && e.laneId === "right",
+			)) as { reason?: string };
+			const done = await waitFor(received, (e) => e.type === "run/done");
+
+			// Both lanes error and the run ends; the reason stays server-side.
+			expect(leftError.reason).toBeUndefined();
+			expect(rightError.reason).toBeUndefined();
+			expect(done).toEqual({
+				type: "run/done",
+				runId: factory.lastRun?.handle.id,
+			});
+			// The run never spawned a worker.
+			expect(factory.lastRun?.request.workspace).toBe(
+				"/nonexistent/dsh-compare-workspace",
+			);
+		} finally {
+			ws.close();
+		}
+	});
+
 	it("routes worker events to their lane and orchestrator events to the top", async () => {
 		const factory = createScriptedRunFactory();
 		const handle = await start({ port: 0, startRun: factory.startRun });
