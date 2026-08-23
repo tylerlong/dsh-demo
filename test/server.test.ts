@@ -132,8 +132,7 @@ describe("static page", () => {
 		// shows a hint pointing at DSH web. Submit is served disabled.
 		expect(html).toContain('<select id="workspace"');
 		expect(html).toContain('id="workspace-hint"');
-		expect(html).toContain("/api/workspaces");
-		expect(html).toContain("newestSessionAt");
+		expect(html).toContain('id="cancel"');
 		expect(html).toContain(
 			'<button id="submit" type="button" disabled>Submit</button>',
 		);
@@ -494,37 +493,41 @@ describe("ws run lifecycle", () => {
 	});
 });
 describe("client run-lifecycle wiring", () => {
-	it("serves a page whose script routes run events, locks inputs, submits/cancels", async () => {
+	it("serves the extracted browser script that routes run events, locks inputs, submits/cancels", async () => {
 		const handle = await start({ port: 0 });
-		const res = await fetch(`${handle.url}/`);
-		const html = await res.text();
+		// The script lives at /app.js, served from disk like the document.
+		const res = await fetch(`${handle.url}/app.js`);
+		expect(res.status).toBe(200);
+		expect(res.headers.get("content-type")).toContain("javascript");
+		const script = await res.text();
 
 		// Submit builds the run request with the three model slots; cancel is wired.
-		expect(html).toContain('type: "submit"');
-		expect(html).toContain("laneModels");
-		expect(html).toContain('type: "cancel"');
+		expect(script).toContain('type: "submit"');
+		expect(script).toContain("laneModels");
+		expect(script).toContain('type: "cancel"');
 		// Streaming routes lane events to their panel and orchestrator to the top.
-		expect(html).toContain("ws.onmessage");
-		expect(html).toContain("run/started");
-		expect(html).toContain("run/done");
-		expect(html).toContain("run/canceled");
-		expect(html).toContain("lane/worker/error");
-		expect(html).toContain("lane/worker/delta");
-		expect(html).toContain("orchestrator/delta");
+		expect(script).toContain("ws.onmessage");
+		expect(script).toContain("run/started");
+		expect(script).toContain("run/done");
+		expect(script).toContain("run/canceled");
+		expect(script).toContain("lane/worker/error");
+		expect(script).toContain("lane/worker/delta");
+		expect(script).toContain("orchestrator/delta");
 		// All inputs are locked during a run except Cancel.
-		expect(html).toContain("setInputsLocked");
-		expect(html).toContain("el(id).disabled = locked");
-		expect(html).toContain('id="cancel"');
+		expect(script).toContain("setInputsLocked");
+		expect(script).toContain("el(id).disabled = locked");
 		// Cancel winds running lanes down to a canceled chip; done marks them done.
-		expect(html).toContain('finishLane(lane, "canceled", "canceled")');
-		expect(html).toContain('finishLane(lane, "done", "done")');
-		// Submit carries the chosen workspace's path from the dropdown, rows show
+		expect(script).toContain('finishLane(lane, "canceled", "canceled")');
+		expect(script).toContain('finishLane(lane, "done", "done")');
+		// Submit carries the chosen workspace path from the dropdown, rows show
 		// title + path, and no local remember/check wiring remains.
-		expect(html).toContain("currentWorkspace()");
-		expect(html).toContain("option.value = w.path");
-		expect(html).toContain('w.title + " (" + w.path + ")"');
-		expect(html).not.toContain("localforage");
-		expect(html).not.toContain("/api/workspace/check");
-		expect(html).not.toContain("rememberWorkspace");
+		expect(script).toContain("currentWorkspace()");
+		expect(script).toContain("option.value = w.path");
+		expect(script).toContain('w.title + " (" + w.path + ")"');
+		expect(script).toContain("/api/workspaces");
+		expect(script).toContain("newestSessionAt");
+		expect(script).not.toContain("localforage");
+		expect(script).not.toContain("/api/workspace/check");
+		expect(script).not.toContain("rememberWorkspace");
 	});
 });
