@@ -12,12 +12,16 @@ _Avoid_: job, try, comparison, submission
 One side of the comparison: a model, the worker that performs the run's task on that model, and that worker's output.
 _Avoid_: column, panel, side
 
+**workspace**:
+The folder a run is pointed at; a run's agents may read its contents for context. It becomes the orchestrator's session cwd, and spawned workers inherit it. Considered read-only.
+_Avoid_: project folder, working directory, cwd
+
 **worker**:
 A read-only sub-agent spawned to perform the run's task on its lane's model. Workers only read from the workspace so concurrent lanes never conflict over edits.
 _Avoid_: task agent, sub-task, helper
 
 **orchestrator**:
-The primary agent for a run: it spawns and coordinates the two workers, waits for both, then produces a comparison summary.
+The primary agent for a run: it spawns and coordinates the two workers and waits for both to settle. It does not produce a comparison summary.
 _Avoid_: coordinator, manager, driver
 
 **dsh-compare**:
