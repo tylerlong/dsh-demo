@@ -13,7 +13,7 @@ One side of the comparison: a model, the worker that performs the run's task on 
 _Avoid_: column, panel, side
 
 **workspace**:
-The folder a run is pointed at; a run's agents may read its contents for context. It becomes the orchestrator's session cwd, and spawned workers inherit it. Considered read-only.
+A folder selected from the shared DSH workspace catalog (owned by DSH web); dsh-compare reads it read-only. It becomes the orchestrator's session cwd, and spawned workers inherit it. Considered read-only.
 _Avoid_: project folder, working directory, cwd
 
 **worker**:
