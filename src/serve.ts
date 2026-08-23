@@ -4,14 +4,17 @@
  * Boots the shared harness tree (src/boot.ts) and starts the HTTP + WebSocket
  * server (src/server.ts), wiring the /api/models dropdown source to the
  * harness's configured model list (the llm-pi-ai namespace) via the harness
- * llm registry. Ticket #3 scope only: the server accepts connections and
- * serves the shell; submission/cancellation over the socket is ticket #4.
+ * llm registry. The run factory seam (src/run-factory.ts) is wired to the
+ * harness-backed factory (src/real-run-factory.ts), so a manual smoke test
+ * (boot server → connect → submit → watch two lanes → cancel) exercises the
+ * real orchestration end to end (ticket #5).
  *
  * Run:  pnpm serve
  * Port: DSH_COMPARE_PORT env, default 4173.
  */
 import { bootHarness } from "./boot.ts";
 import { convertLlmModels, type LlmLike } from "./model-list.ts";
+import { createRunFactory } from "./real-run-factory.ts";
 import { startServer } from "./server.ts";
 
 /** Port for the server; override with DSH_COMPARE_PORT. */
@@ -30,6 +33,8 @@ try {
 				);
 				return [];
 			}),
+		// Production wires the seam to the harness-backed factory.
+		startRun: createRunFactory(ctx),
 	});
 
 	const shutdown = async (signal: string): Promise<void> => {

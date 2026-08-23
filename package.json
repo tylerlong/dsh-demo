@@ -11,7 +11,7 @@
 	"scripts": {
 		"demo": "tsx src/index.ts",
 		"enhanced": "tsx src/enhanced-flow.ts",
-		"serve": "tsx src/serve.ts",
+		"serve": "tsx --expose-internals src/serve.ts",
 		"typecheck": "tsc --noEmit",
 		"test": "vitest run",
 		"lint": "biome check . --write",
