@@ -1,23 +1,29 @@
 // @vitest-environment jsdom
 /**
- * useRun.test.tsx — component tests for the run lifecycle hook (ticket #33).
+ * useRun.test.tsx — component tests for the run lifecycle hook (ticket #33,
+ * parent #37).
  *
  * The hook owns the WebSocket connection and the run state machine (idle →
- * running → streaming events → done / error / canceled) plus input locking.
- * These tests drive the whole lifecycle with a mocked WebSocket injected
- * through App's createSocket seam, and assert only what a user sees — the
- * streamed lane output, the run and lane status chips, the locked/unlocked
- * inputs, and the submit/cancel enabled states — never internal component
- * state. This replaces the deleted server-side browser-script wiring suite:
- * the client behavior it pinned is now verified against the React DOM using
- * the shared protocol's event vocabulary (shared/protocol.ts).
+ * running → done / error / canceled) plus input locking. These tests drive
+ * the whole lifecycle with a mocked WebSocket injected through App's
+ * createSocket seam, and assert only what a user sees — the run and lane
+ * status chips, the locked/unlocked inputs, and the submit/cancel enabled
+ * states — never internal component state. The session browser (parent #37)
+ * is present but scripted: the tree loads, the latest session is preselected
+ * (arming submit), and a watch message registers the viewed session. Rendered
+ * output is NOT asserted here — it comes from the store via the transcript
+ * panel, covered by SessionBrowser.test.tsx.
  */
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { RunEvent, RunRequest } from "../../shared/protocol.ts";
 import { App } from "./App.tsx";
-import type { ModelsResponse, WorkspaceOption } from "./api.ts";
+import type {
+	ModelsResponse,
+	SessionTranscript,
+	SessionTree,
+} from "./api.ts";
 
 const MODELS: ModelsResponse = {
 	models: [
@@ -39,20 +45,22 @@ const MODELS: ModelsResponse = {
 	},
 };
 
-const WORKSPACES: readonly WorkspaceOption[] = [
+const SESSION_TREE: SessionTree = [
 	{
 		id: "ws-alpha",
 		path: "/opt/alpha-project",
 		title: "Alpha",
-		newestSessionAt: 1700000000000,
-	},
-	{
-		id: "ws-beta",
-		path: "/opt/beta-project",
-		title: "Beta",
-		newestSessionAt: 1700000500000,
+		sessions: [
+			{ id: "session-1", createdAt: 1700000000000 },
+			{ id: "session-2", createdAt: 1700000500000 },
+		],
 	},
 ];
+
+const TRANSCRIPT: SessionTranscript = {
+	primary: { sessionId: "session-2", lines: ["primary output"] },
+	lanes: [],
+};
 
 /**
  * A scriptable WebSocket fake: the test opens/closes/errors it and emits run
@@ -90,14 +98,15 @@ class FakeWebSocket {
 	}
 }
 
-/** Render the whole app with a scriptable socket and ready form data. */
+/** Render the whole app with a scriptable socket and ready session data. */
 function renderApp(): FakeWebSocket {
 	const socket = new FakeWebSocket();
 	render(
 		<App
 			createSocket={() => socket as unknown as WebSocket}
 			loadModels={async () => MODELS}
-			loadWorkspaces={async () => WORKSPACES}
+			loadSessions={async () => SESSION_TREE}
+			loadTranscript={async () => TRANSCRIPT}
 		/>,
 	);
 	return socket;
@@ -108,20 +117,19 @@ function controls() {
 	return {
 		task: screen.getByLabelText("Task"),
 		primary: screen.getByRole("combobox", { name: "Primary model" }),
-		workspace: screen.getByRole("combobox", { name: "Workspace" }),
 		submit: screen.getByRole("button", { name: "Submit" }),
 		cancel: screen.getByRole("button", { name: "Cancel" }),
 		connStatus: screen.getByTestId("conn-status"),
 		primaryStatus: screen.getByTestId("primary-status"),
-		primaryOutput: screen.getByTestId("primary-output"),
 		leftStatus: screen.getByTestId("lane-left-status"),
-		leftOutput: screen.getByTestId("lane-left-output"),
 		rightStatus: screen.getByTestId("lane-right-status"),
-		rightOutput: screen.getByTestId("lane-right-output"),
 	};
 }
 
-/** Wait until the form data has loaded and submit is usable. */
+/**
+ * Wait until the session tree has loaded, the latest session is preselected,
+ * and the form data has loaded — i.e. submit is usable.
+ */
 async function readyForm(): Promise<void> {
 	await waitFor(() =>
 		expect(screen.getByRole("button", { name: "Submit" })).toBeEnabled(),
@@ -137,7 +145,7 @@ function expectedRequest(task: string): RunRequest {
 			left: MODELS.defaults.left,
 			right: MODELS.defaults.right,
 		},
-		sessionId: "/opt/beta-project",
+		sessionId: "session-2",
 	};
 }
 
@@ -177,16 +185,23 @@ describe("useRun connection status", () => {
 });
 
 describe("useRun run lifecycle", () => {
-	it("submit starts both lanes and streams their output live, locking the inputs", async () => {
+	it("watches the preselected session and submits a run carrying its session id, locking the inputs", async () => {
 		const user = userEvent.setup();
 		const socket = renderApp();
 		await readyForm();
 		act(() => socket.open());
 
+		// The preselected session's watch is (re)sent once the socket opens.
+		expect(JSON.parse(socket.sent[0] ?? "{}")).toEqual({
+			type: "watch",
+			sessionId: "session-2",
+		});
+
 		await user.type(controls().task, "haiku");
 		await user.click(controls().submit);
 
-		// The assembled run request goes over the socket in the shared shape.
+		// The assembled run request goes over the socket in the shared shape,
+		// carrying the selected session id (parent #37).
 		expect(lastSent(socket)).toEqual({
 			type: "submit",
 			request: expectedRequest("haiku"),
@@ -196,53 +211,30 @@ describe("useRun run lifecycle", () => {
 		act(() => socket.emit({ type: "run/started", runId: "run-1" }));
 		expect(controls().task).toBeDisabled();
 		expect(controls().primary).toBeDisabled();
-		expect(controls().workspace).toBeDisabled();
 		expect(controls().submit).toBeDisabled();
 		expect(controls().cancel).toBeEnabled();
 		expect(controls().primaryStatus).toHaveTextContent(/^running/);
 
-		// Both lanes start and stream their deltas live.
+		// Both lanes start and settle; the status chips follow the events.
 		act(() => socket.emit({ type: "lane/worker/started", laneId: "left" }));
 		act(() => socket.emit({ type: "lane/worker/started", laneId: "right" }));
 		expect(controls().leftStatus).toHaveTextContent(/^running/);
 		expect(controls().rightStatus).toHaveTextContent(/^running/);
 
-		act(() =>
-			socket.emit({ type: "lane/worker/delta", laneId: "left", text: "the " }),
-		);
-		act(() =>
-			socket.emit({ type: "lane/worker/delta", laneId: "left", text: "sea" }),
-		);
-		act(() =>
-			socket.emit({ type: "lane/worker/delta", laneId: "right", text: "the " }),
-		);
-		act(() =>
-			socket.emit({
-				type: "lane/worker/delta",
-				laneId: "right",
-				text: "shore",
-			}),
-		);
-		act(() =>
-			socket.emit({ type: "orchestrator/delta", text: "spawning workers" }),
-		);
-		expect(controls().leftOutput).toHaveTextContent("the sea");
-		expect(controls().rightOutput).toHaveTextContent("the shore");
-		expect(controls().primaryOutput).toHaveTextContent("spawning workers");
-
-		// Both lanes settle, the run ends done, and the inputs unlock.
 		act(() => socket.emit({ type: "lane/worker/done", laneId: "left" }));
 		act(() => socket.emit({ type: "lane/worker/done", laneId: "right" }));
 		act(() => socket.emit({ type: "run/done", runId: "run-1" }));
+
 		expect(controls().leftStatus).toHaveTextContent(/^done/);
 		expect(controls().rightStatus).toHaveTextContent(/^done/);
 		expect(controls().primaryStatus).toHaveTextContent(/^done/);
+		// A terminal run unlocks the form for a new one.
 		expect(controls().task).toBeEnabled();
 		expect(controls().submit).toBeEnabled();
 		expect(controls().cancel).toBeDisabled();
 	});
 
-	it("cancel aborts the whole run and a terminal run frees the form for a new run", async () => {
+	it("cancel aborts the active run over the socket and a terminal run frees the form", async () => {
 		const user = userEvent.setup();
 		const socket = renderApp();
 		await readyForm();
@@ -251,10 +243,10 @@ describe("useRun run lifecycle", () => {
 		await user.type(controls().task, "haiku");
 		await user.click(controls().submit);
 		act(() => socket.emit({ type: "run/started", runId: "run-1" }));
-		await user.click(controls().cancel);
 
-		// Cancel goes over the socket; run/canceled ends the run and unlocks.
+		await user.click(controls().cancel);
 		expect(lastSent(socket)).toEqual({ type: "cancel" });
+
 		act(() => socket.emit({ type: "run/canceled", runId: "run-1" }));
 		expect(controls().primaryStatus).toHaveTextContent(/^canceled/);
 		expect(controls().task).toBeEnabled();
@@ -295,6 +287,7 @@ describe("useRun run lifecycle", () => {
 		expect(controls().leftStatus).toHaveTextContent(/^error/);
 		expect(controls().rightStatus).toHaveTextContent(/^done/);
 		expect(controls().primaryStatus).toHaveTextContent(/^done/);
+		expect(controls().task).toBeEnabled();
 	});
 
 	it("a connection failure mid-run ends the run in error and unlocks the inputs", async () => {

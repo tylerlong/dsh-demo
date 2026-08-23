@@ -5,10 +5,12 @@
  * (streaming events) → done / error / canceled — plus input locking. The hook
  * opens the socket to the shared WS_PATH on mount, submits a run request and
  * cancels the active run over it, and routes every run event from the shared
- * protocol (shared/protocol.ts) into state the UI renders: the run status,
- * the orchestrator's top output, and each lane's status chip and streamed
- * output. It exposes `locked` so the run configuration form disables its
- * inputs while a run is active.
+ * protocol (shared/protocol.ts) into state the UI renders: the run status and
+ * each lane's status chip. It exposes `locked` so the run configuration form
+ * disables its inputs while a run is active. Rendered output is NOT streamed
+ * here — the session browser reads it from the store (parent ticket #37);
+ * session/updated events are surfaced through `onSessionUpdated` so the
+ * caller re-reads the viewed session's transcript.
  *
  * The connection status is its own four-state machine — connecting /
  * connected / disconnected / error — so the user always knows whether the
@@ -38,11 +40,9 @@ export type RunState = "idle" | "running" | "done" | "error" | "canceled";
 /** One lane worker's lifecycle status, shown as a status chip. */
 export type LaneStatus = "idle" | "running" | "done" | "error" | "canceled";
 
-/** The per-lane state the hook owns: status chip, streamed output, elapsed. */
+/** The per-lane state the hook owns: status chip and elapsed. */
 export interface LaneRunState {
 	readonly status: LaneStatus;
-	/** The lane worker's streamed text, appended live from deltas. */
-	readonly output: string;
 	/** Seconds since the lane worker started (frozen at its terminal state). */
 	readonly elapsed: number;
 }
@@ -55,6 +55,13 @@ export interface UseRunOptions {
 	 * lifecycle is scriptable without a browser.
 	 */
 	readonly createSocket?: () => WebSocket;
+	/**
+	 * Called when the server pushes a session/updated event (parent ticket
+	 * #37): the viewed session's store content advanced, so the caller should
+	 * re-read its transcript. The callback is captured at first render, so it
+	 * reads the current selection through a ref.
+	 */
+	readonly onSessionUpdated?: (sessionId: string) => void;
 }
 
 /** The run lifecycle surface the app shell renders against. */
@@ -67,10 +74,8 @@ export interface UseRunResult {
 	readonly runId: string | undefined;
 	/** Seconds since the run started (frozen at its terminal state). */
 	readonly runElapsed: number;
-	/** Per-lane status chip, streamed output, and elapsed seconds. */
+	/** Per-lane status chip and elapsed seconds (output comes from the store). */
 	readonly lanes: Record<LaneId, LaneRunState>;
-	/** The orchestrator's streamed output (the run's top section). */
-	readonly orchestratorOutput: string;
 	/** Whether a run is active: locks the form inputs and arms Cancel. */
 	readonly locked: boolean;
 	/**
@@ -80,11 +85,17 @@ export interface UseRunResult {
 	readonly submit: (request: RunRequest) => void;
 	/** Cancel the active run over the socket (no-op unless a run is running). */
 	readonly cancel: () => void;
+	/**
+	 * Tell the server which session this tab is viewing, so it pushes
+	 * session/updated events while that session runs (no-op unless connected;
+	 * re-sent when the socket opens).
+	 */
+	readonly watch: (sessionId: string) => void;
 }
 
-/** A fresh idle lane: no chip, no output, no elapsed time. */
+/** A fresh idle lane: no chip, no elapsed time. */
 function idleLane(): LaneRunState {
-	return { status: "idle", output: "", elapsed: 0 };
+	return { status: "idle", elapsed: 0 };
 }
 
 /** The default socket: the shared WS path on the current origin. */
@@ -103,7 +114,10 @@ function settleRunningLanes(
 	return { left: settle(lanes.left), right: settle(lanes.right) };
 }
 
-export function useRun({ createSocket }: UseRunOptions = {}): UseRunResult {
+export function useRun({
+	createSocket,
+	onSessionUpdated,
+}: UseRunOptions = {}): UseRunResult {
 	const [connectionStatus, setConnectionStatus] =
 		useState<ConnectionStatus>("connecting");
 	const [runState, setRunState] = useState<RunState>("idle");
@@ -113,14 +127,15 @@ export function useRun({ createSocket }: UseRunOptions = {}): UseRunResult {
 		left: idleLane(),
 		right: idleLane(),
 	});
-	const [orchestratorOutput, setOrchestratorOutput] = useState("");
 
 	// The socket and the run state live behind refs so the mount-time socket
 	// handlers and the submit/cancel actions always read the current run state
 	// without re-registering the socket on every render.
 	const createSocketRef = useRef(createSocket);
+	const onSessionUpdatedRef = useRef(onSessionUpdated);
 	const wsRef = useRef<WebSocket | null>(null);
 	const runStateRef = useRef<RunState>("idle");
+	const watchSessionIdRef = useRef<string | undefined>(undefined);
 	useEffect(() => {
 		runStateRef.current = runState;
 	}, [runState]);
@@ -137,7 +152,6 @@ export function useRun({ createSocket }: UseRunOptions = {}): UseRunResult {
 					setRunId(event.runId);
 					setRunState("running");
 					setRunElapsed(0);
-					setOrchestratorOutput("");
 					setLanes({ left: idleLane(), right: idleLane() });
 					break;
 				case "run/done":
@@ -150,9 +164,6 @@ export function useRun({ createSocket }: UseRunOptions = {}): UseRunResult {
 					setLanes((previous) => settleRunningLanes(previous, "canceled"));
 					setRunState("canceled");
 					break;
-				case "orchestrator/delta":
-					setOrchestratorOutput((previous) => previous + event.text);
-					break;
 				case "lane/worker/started":
 					setLanes((previous) => ({
 						...previous,
@@ -160,15 +171,6 @@ export function useRun({ createSocket }: UseRunOptions = {}): UseRunResult {
 							...previous[event.laneId],
 							status: "running",
 							elapsed: 0,
-						},
-					}));
-					break;
-				case "lane/worker/delta":
-					setLanes((previous) => ({
-						...previous,
-						[event.laneId]: {
-							...previous[event.laneId],
-							output: previous[event.laneId].output + event.text,
 						},
 					}));
 					break;
@@ -184,11 +186,23 @@ export function useRun({ createSocket }: UseRunOptions = {}): UseRunResult {
 						[event.laneId]: { ...previous[event.laneId], status: "error" },
 					}));
 					break;
+				case "session/updated":
+					// The viewed session's store content advanced; the caller
+					// re-reads its transcript (output comes from the store, never
+					// assembled from streamed deltas — parent ticket #37).
+					onSessionUpdatedRef.current?.(event.sessionId);
+					break;
 			}
 		};
 
 		ws.onopen = () => {
 			setConnectionStatus("connected");
+			// A watch requested before the socket opened is re-sent now, so live
+			// updates resume after a reconnect or a slow initial connection.
+			const pending = watchSessionIdRef.current;
+			if (pending !== undefined) {
+				ws.send(JSON.stringify({ type: "watch", sessionId: pending }));
+			}
 		};
 		ws.onerror = () => {
 			setConnectionStatus("error");
@@ -285,15 +299,29 @@ export function useRun({ createSocket }: UseRunOptions = {}): UseRunResult {
 		ws.send(JSON.stringify({ type: "cancel" }));
 	};
 
+	/**
+	 * Tell the server which session this tab is viewing. The id is kept in a
+	 * ref and re-sent whenever the socket opens, so live session/updated
+	 * pushes resume after a reconnect (parent ticket #37).
+	 */
+	const watch = (sessionId: string): void => {
+		watchSessionIdRef.current = sessionId;
+		const ws = wsRef.current;
+		if (ws === null || ws.readyState !== WebSocket.OPEN) {
+			return;
+		}
+		ws.send(JSON.stringify({ type: "watch", sessionId }));
+	};
+
 	return {
 		connectionStatus,
 		runState,
 		runId,
 		runElapsed,
 		lanes,
-		orchestratorOutput,
 		locked: runState === "running",
 		submit,
 		cancel,
+		watch,
 	};
 }

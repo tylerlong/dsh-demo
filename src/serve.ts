@@ -17,6 +17,7 @@ import {
 	loadModelsFromContext,
 	loadSessionsFromContext,
 	loadTranscriptFromContext,
+	watchSessionFromContext,
 } from "./harness-adapters.ts";
 import { createRunFactory } from "./real-run-factory.ts";
 import { startServer } from "./server.ts";
@@ -35,6 +36,8 @@ try {
 		loadModels: loadModelsFromContext(ctx),
 		loadSessions: loadSessionsFromContext(ctx),
 		loadTranscript: loadTranscriptFromContext(ctx),
+		// Live session/updated pushes for the viewed session (parent #37).
+		watchSession: watchSessionFromContext(ctx),
 		// Production wires the seam to the harness-backed factory.
 		startRun: createRunFactory(ctx),
 	});

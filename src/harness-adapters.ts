@@ -103,3 +103,24 @@ export function loadTranscriptFromContext(
 			return { primary: { sessionId, lines: [] }, lanes: [] };
 		});
 }
+
+/**
+ * The live session-store watcher supplied from the booted context (parent
+ * ticket #37): register a listener on the shared session/event feed for one
+ * session and call the callback whenever that session's store content advances
+ * (an assistant chunk is the visible progress signal). Returns the disposer.
+ * Strictly read-only — the listener never mutates the store.
+ */
+export function watchSessionFromContext(
+	ctx: Context,
+): (sessionId: string, onUpdate: () => void) => () => void {
+	return (sessionId, onUpdate) =>
+		ctx.on("session/event", (session, event) => {
+			if (session.id !== sessionId) {
+				return;
+			}
+			if (event.type === "assistant/chunk") {
+				onUpdate();
+			}
+		});
+}

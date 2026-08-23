@@ -86,6 +86,19 @@ export interface ServerOptions {
 	 * factory confirms a run, so nothing hangs in the interim.
 	 */
 	readonly startRun?: StartRun;
+	/**
+	 * Inject the live session-store watcher (parent ticket #37): given a
+	 * session id and a callback, register a watcher on that session's store
+	 * events and return a disposer. Production wires the booted context's
+	 * session/event feed (see harness-adapters.ts); tests inject a scriptable
+	 * watcher. While a tab watches a session, the server pushes session/updated
+	 * to that tab whenever the watcher fires, so the client re-reads the viewed
+	 * session's transcript from the store. Absent when no watcher is wired.
+	 */
+	readonly watchSession?: (
+		sessionId: string,
+		onUpdate: () => void,
+	) => () => void;
 }
 
 /** A running harness-workflow server. */
@@ -240,11 +253,21 @@ interface ConnectionRun {
 	readonly handle: RunHandle;
 }
 
+/** The session this tab is watching for live session/updated pushes. */
+interface WatchedSession {
+	/** The watched session's id. */
+	readonly sessionId: string;
+	/** Disposer for the store watcher; called on re-watch and disconnect. */
+	readonly dispose: () => void;
+}
+
 /** A message a browser tab sends to the /ws server. */
 interface ClientMessage {
-	readonly type: "submit" | "cancel" | string;
+	readonly type: "submit" | "cancel" | "watch" | string;
 	/** Populated for a submit; the run request to forward to the factory. */
 	readonly request?: unknown;
+	/** Populated for a watch; the session this tab is viewing. */
+	readonly sessionId?: unknown;
 }
 
 /**
@@ -258,6 +281,24 @@ interface ClientMessage {
  */
 function handleConnection(ws: WebSocket, options: ServerOptions): void {
 	let current: ConnectionRun | undefined;
+	let watched: WatchedSession | undefined;
+
+	/**
+	 * Begin watching one session's store events and push session/updated to
+	 * the tab on each update. Re-watching disposes the previous watcher: the
+	 * tab views one session at a time.
+	 */
+	const beginWatching = (sessionId: string): void => {
+		if (watched?.sessionId === sessionId) {
+			return;
+		}
+		watched?.dispose();
+		const dispose =
+			options.watchSession?.(sessionId, () => {
+				sendEvent(ws, { type: "session/updated", sessionId });
+			}) ?? (() => {});
+		watched = { sessionId, dispose };
+	};
 
 	/** Forward one run event to the client, logging lane errors server-side. */
 	const onEvent = (event: RunEvent): void => {
@@ -298,17 +339,27 @@ function handleConnection(ws: WebSocket, options: ServerOptions): void {
 				return;
 			}
 			if (isRunRequest(message.request)) {
+				// The run continues the viewed session; watch it so its store
+				// updates push session/updated while it runs (parent #37).
+				beginWatching(message.request.sessionId);
 				current = {
 					handle: options.startRun(message.request, onEvent),
 				};
 			}
 		} else if (message.type === "cancel") {
 			current?.handle.cancel();
+		} else if (message.type === "watch") {
+			if (typeof message.sessionId === "string") {
+				beginWatching(message.sessionId);
+			}
 		}
 	});
 
 	ws.on("close", () => {
-		// Closing or refreshing a tab cancels only this tab's run.
+		// Closing or refreshing a tab cancels only this tab's run and stops
+		// its session watcher.
+		watched?.dispose();
+		watched = undefined;
 		current?.handle.cancel();
 		current = undefined;
 	});
@@ -342,7 +393,11 @@ function parseMessage(data: RawData): ClientMessage | undefined {
 	try {
 		const value: unknown = JSON.parse(text);
 		if (isRecord(value) && typeof value.type === "string") {
-			return { type: value.type, request: value.request };
+			return {
+				type: value.type,
+				request: value.request,
+				sessionId: value.sessionId,
+			};
 		}
 	} catch {
 		// Not JSON; ignore the malformed frame.

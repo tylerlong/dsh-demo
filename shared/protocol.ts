@@ -90,12 +90,25 @@ export interface RunCanceledEvent {
 }
 
 /**
+ * The viewed session's store content advanced (parent ticket #37): the server
+ * pushes this while a session the tab is watching runs, so the client re-reads
+ * that session's transcript from the store. Output is never assembled from
+ * streamed deltas — this event only signals that a fresh store read is due.
+ */
+export interface SessionUpdatedEvent {
+	type: "session/updated";
+	sessionId: string;
+}
+
+/**
  * The run event/message vocabulary, delivered through its onEvent sink.
  *
  * Lane events carry a laneId so the server can route each to the owning lane
  * panel; orchestrator events target the top section; run lifecycle events
  * describe the whole run. There is no run/summary: the run ends with run/done
- * as soon as both lanes settle. This is the contract the browser UI builds on.
+ * as soon as both lanes settle. The rendered output is read from the store
+ * (parent ticket #37); session/updated tells the client when to re-read the
+ * viewed session's transcript. This is the contract the browser UI builds on.
  */
 export type RunEvent =
 	| RunStartedEvent
@@ -105,7 +118,19 @@ export type RunEvent =
 	| LaneWorkerDoneEvent
 	| LaneWorkerErrorEvent
 	| RunDoneEvent
-	| RunCanceledEvent;
+	| RunCanceledEvent
+	| SessionUpdatedEvent;
+
+/**
+ * A client → server message telling the server which session this tab is
+ * viewing, so it pushes session/updated events while that session runs
+ * (parent ticket #37). Sent when the selection changes and re-sent whenever
+ * the socket opens.
+ */
+export interface WatchMessage {
+	type: "watch";
+	sessionId: string;
+}
 
 /** WebSocket endpoint path, shared by the server and the client. */
 export const WS_PATH = "/ws";

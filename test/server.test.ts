@@ -541,3 +541,114 @@ describe("ws run lifecycle", () => {
 		}
 	});
 });
+
+/**
+ * ws session watching (parent ticket #37) — the server pushes session/updated
+ * to a tab while the session it is watching runs, so the client re-reads the
+ * viewed session's transcript from the store. Driven through the injected
+ * watchSession seam: a scriptable watcher records what is watched and lets
+ * tests fire store updates, exactly as the harness-backed watcher would.
+ */
+function makeWatchSession(): {
+	readonly watched: Array<{ sessionId: string; onUpdate: () => void }>;
+	readonly disposed: string[];
+	readonly watchSession: ServerOptions["watchSession"];
+} {
+	const watched: Array<{ sessionId: string; onUpdate: () => void }> = [];
+	const disposed: string[] = [];
+	const watchSession: ServerOptions["watchSession"] = (sessionId, onUpdate) => {
+		watched.push({ sessionId, onUpdate });
+		return () => {
+			disposed.push(sessionId);
+		};
+	};
+	return { watched, disposed, watchSession };
+}
+
+describe("ws session watching", () => {
+	it("submit watches the resumed session, so its store updates push session/updated", async () => {
+		const factory = createScriptedRunFactory();
+		const { watched, watchSession } = makeWatchSession();
+		const handle = await start({
+			port: 0,
+			startRun: factory.startRun,
+			watchSession,
+		});
+		const ws = await connect(handle);
+		const received: RunEvent[] = [];
+		ws.on("message", (data) => received.push(parse<RunEvent>(data)));
+		try {
+			sendJson(ws, submitMessage(baseRequest("haiku")));
+			await waitUntil(() => watched.length === 1);
+			expect(watched[0]?.sessionId).toBe("session-ws-test");
+
+			// The store advances; the server pushes session/updated to the tab.
+			watched[0]?.onUpdate();
+			const updated = await waitFor(
+				received,
+				(e) => e.type === "session/updated",
+			);
+			expect(updated).toEqual({
+				type: "session/updated",
+				sessionId: "session-ws-test",
+			});
+		} finally {
+			ws.close();
+		}
+	});
+
+	it("a watch message registers the viewed session for live session/updated pushes", async () => {
+		const { watched, watchSession } = makeWatchSession();
+		const handle = await start({ port: 0, watchSession });
+		const ws = await connect(handle);
+		const received: RunEvent[] = [];
+		ws.on("message", (data) => received.push(parse<RunEvent>(data)));
+		try {
+			sendJson(ws, { type: "watch", sessionId: "session-3" });
+			await waitUntil(() => watched.length === 1);
+			expect(watched[0]?.sessionId).toBe("session-3");
+
+			watched[0]?.onUpdate();
+			const updated = await waitFor(
+				received,
+				(e) => e.type === "session/updated",
+			);
+			expect(updated).toEqual({
+				type: "session/updated",
+				sessionId: "session-3",
+			});
+		} finally {
+			ws.close();
+		}
+	});
+
+	it("re-watching a different session disposes the previous watcher", async () => {
+		const { watched, disposed, watchSession } = makeWatchSession();
+		const handle = await start({ port: 0, watchSession });
+		const ws = await connect(handle);
+		try {
+			sendJson(ws, { type: "watch", sessionId: "session-1" });
+			await waitUntil(() => watched.length === 1);
+			sendJson(ws, { type: "watch", sessionId: "session-2" });
+			await waitUntil(() => watched.length === 2);
+			expect(watched.map((w) => w.sessionId)).toEqual([
+				"session-1",
+				"session-2",
+			]);
+			expect(disposed).toEqual(["session-1"]);
+		} finally {
+			ws.close();
+		}
+	});
+
+	it("closing the tab disposes the watcher", async () => {
+		const { watched, disposed, watchSession } = makeWatchSession();
+		const handle = await start({ port: 0, watchSession });
+		const ws = await connect(handle);
+		sendJson(ws, { type: "watch", sessionId: "session-1" });
+		await waitUntil(() => watched.length === 1);
+		ws.close();
+		await waitUntil(() => disposed.length === 1);
+		expect(disposed).toEqual(["session-1"]);
+	});
+});

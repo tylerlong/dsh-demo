@@ -1,13 +1,18 @@
 /**
  * api.ts — the harness-workflow client API.
  *
- * The run configuration form's model and workspace selectors populate at
- * runtime from the server's model-list and workspace-list endpoints (ticket
- * #32): GET /api/models returns the configured model list plus the agreed
- * default selection, and GET /api/workspaces returns the shared workspace
- * catalog rows. These thin fetch wrappers mirror the shapes the server serves
- * (see src/model-list.ts and src/workspace-list.ts), so the client and the
- * server agree on the dropdown contract.
+ * The run configuration form's model selectors populate at runtime from the
+ * server's model-list endpoint (ticket #32), and the session browser (parent
+ * ticket #37) reads the read-only workspace → sessions tree and the selected
+ * session's transcript from the server's session endpoints: GET /api/sessions
+ * returns the two-level tree (workspaces with their sessions, each labeled by
+ * its id), and GET /api/sessions/:id/transcript returns the selected session's
+ * recent ~100-line window (primary + lane-worker children). These thin fetch
+ * wrappers mirror the shapes the server serves (see src/session-tree.ts and
+ * src/session-transcript.ts), so the client and the server agree on the
+ * session-browser contract. The workspace dropdown is gone (parent #37): the
+ * run continues the session picked in the tree, so there is no workspace
+ * fetch here.
  */
 
 /** One selectable model option served by GET /api/models. */
@@ -36,20 +41,43 @@ export interface ModelsResponse {
 	readonly defaults: DefaultModels;
 }
 
-/** One workspace row served by GET /api/workspaces. */
-export interface WorkspaceOption {
+/** One session row under a workspace in the tree (mirror of SessionRow). */
+export interface SessionRow {
+	/** The session's id; also its label (the only stable label). */
+	readonly id: string;
+	/** Unix epoch milliseconds when the session was created. */
+	readonly createdAt: number;
+}
+
+/** One workspace node in the two-level tree (mirror of WorkspaceNode). */
+export interface WorkspaceNode {
 	/** Stable registry id (generated uuid). */
 	readonly id: string;
-	/** Canonical directory path; the run's workspace. */
+	/** Canonical directory path. */
 	readonly path: string;
-	/** Display title shown in the dropdown. */
+	/** Display title. */
 	readonly title: string;
-	/**
-	 * Newest-session creation timestamp (Unix epoch milliseconds), used to
-	 * preselect the most recently used workspace. Omitted when the workspace
-	 * has no sessions.
-	 */
-	readonly newestSessionAt?: number;
+	/** The workspace's sessions, each labeled by its id. */
+	readonly sessions: readonly SessionRow[];
+}
+
+/** The read-only workspace → sessions tree served by GET /api/sessions. */
+export type SessionTree = readonly WorkspaceNode[];
+
+/** One agent's recent transcript window (mirror of TranscriptWindow). */
+export interface TranscriptWindow {
+	/** The session id this window was read from. */
+	readonly sessionId: string;
+	/** The recent ~100-line window of the agent's transcript text. */
+	readonly lines: readonly string[];
+}
+
+/** The read-only transcript read for one selected session. */
+export interface SessionTranscript {
+	/** The selected (primary) session's window. */
+	readonly primary: TranscriptWindow;
+	/** The lane-worker children's windows (found via parentSession). */
+	readonly lanes: readonly TranscriptWindow[];
 }
 
 /** Fetch the configured model list and its agreed defaults from /api/models. */
@@ -61,11 +89,26 @@ export async function fetchModels(): Promise<ModelsResponse> {
 	return (await res.json()) as ModelsResponse;
 }
 
-/** Fetch the shared workspace catalog rows from /api/workspaces. */
-export async function fetchWorkspaces(): Promise<readonly WorkspaceOption[]> {
-	const res = await fetch("/api/workspaces");
+/** Fetch the read-only workspace → sessions tree from /api/sessions. */
+export async function fetchSessions(): Promise<SessionTree> {
+	const res = await fetch("/api/sessions");
 	if (!res.ok) {
-		throw new Error(`GET /api/workspaces failed with status ${res.status}`);
+		throw new Error(`GET /api/sessions failed with status ${res.status}`);
 	}
-	return (await res.json()) as WorkspaceOption[];
+	return (await res.json()) as SessionTree;
+}
+
+/** Fetch one session's recent transcript window from the store. */
+export async function fetchTranscript(
+	sessionId: string,
+): Promise<SessionTranscript> {
+	const res = await fetch(
+		`/api/sessions/${encodeURIComponent(sessionId)}/transcript`,
+	);
+	if (!res.ok) {
+		throw new Error(
+			`GET /api/sessions/${sessionId}/transcript failed with status ${res.status}`,
+		);
+	}
+	return (await res.json()) as SessionTranscript;
 }

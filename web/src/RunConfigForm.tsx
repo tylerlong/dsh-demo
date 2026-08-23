@@ -1,12 +1,16 @@
 /**
- * RunConfigForm.tsx — the run configuration form (ticket #32).
+ * RunConfigForm.tsx — the run configuration form (ticket #32, parent #37).
  *
  * The form collects everything a run needs: the task text, the primary model,
- * the workspace, a lane model per lane, and submit/cancel buttons. The model
- * and workspace selectors populate from the model-list and workspace-list
- * endpoints (GET /api/models, GET /api/workspaces) on mount; every input is
- * disabled until both lists have loaded, so the user never configures a run
- * against empty data.
+ * a lane model per lane, and submit/cancel buttons. The model selectors
+ * populate from the model-list endpoint (GET /api/models) on mount; every
+ * input is disabled until the list has loaded, so the user never configures a
+ * run against empty data.
+ *
+ * The workspace dropdown is gone (parent ticket #37): the run **continues** the
+ * session selected in the left session-browser panel, so the form receives the
+ * selected session's id via `sessionId` and keeps Submit disabled until one is
+ * selected. The task field starts empty.
  *
  * The run lifecycle — wiring submit/cancel to the WebSocket and locking the
  * inputs while a run is active — is ticket #33. This form only renders and
@@ -19,13 +23,10 @@ import { useEffect, useRef, useState } from "react";
 import type { RunRequest } from "../../shared/protocol.ts";
 import {
 	fetchModels,
-	fetchWorkspaces,
 	type ModelOption,
 	type ModelsResponse,
-	type WorkspaceOption,
 } from "./api.ts";
 import { ModelSelect } from "./ModelSelect.tsx";
-import { WorkspaceSelect } from "./WorkspaceSelect.tsx";
 
 export interface RunConfigFormProps {
 	/**
@@ -34,10 +35,11 @@ export interface RunConfigFormProps {
 	 */
 	readonly loadModels?: () => Promise<ModelsResponse>;
 	/**
-	 * Load the workspace catalog. Defaults to the /api/workspaces fetch;
-	 * tests inject a fake.
+	 * The id of the session selected in the session browser (parent #37); the
+	 * run continues this session. Submit stays disabled until one is selected.
+	 * Absent when the catalog is empty or nothing is selected yet.
 	 */
-	readonly loadWorkspaces?: () => Promise<readonly WorkspaceOption[]>;
+	readonly sessionId?: string;
 	/**
 	 * Lock the inputs (ticket #33 wires this while a run is active). While
 	 * locked, every input and Submit are disabled and Cancel is enabled.
@@ -58,54 +60,31 @@ export interface RunConfigFormProps {
 /** The form's data-loading phase: inputs stay disabled until ready. */
 type LoadState = "loading" | "ready" | "error";
 
-/**
- * Preselect the workspace with the newest session, else the first row — the
- * same recency rule the vanilla UI shipped. Returns "" for an empty catalog.
- */
-function preselectWorkspace(workspaces: readonly WorkspaceOption[]): string {
-	let preselect = -1;
-	let newestAt = -1;
-	workspaces.forEach((workspace, index) => {
-		if (
-			typeof workspace.newestSessionAt === "number" &&
-			workspace.newestSessionAt > newestAt
-		) {
-			newestAt = workspace.newestSessionAt;
-			preselect = index;
-		}
-	});
-	return preselect >= 0
-		? (workspaces[preselect]?.path ?? "")
-		: (workspaces[0]?.path ?? "");
-}
-
 export function RunConfigForm({
 	loadModels = fetchModels,
-	loadWorkspaces = fetchWorkspaces,
+	sessionId,
 	locked = false,
 	onSubmit,
 	onCancel,
 }: RunConfigFormProps) {
 	const [loadState, setLoadState] = useState<LoadState>("loading");
 	const [models, setModels] = useState<readonly ModelOption[]>([]);
-	const [workspaces, setWorkspaces] = useState<readonly WorkspaceOption[]>([]);
 	const [task, setTask] = useState("");
 	const [primaryModel, setPrimaryModel] = useState("");
 	const [laneModels, setLaneModels] = useState<{
 		readonly left: string;
 		readonly right: string;
 	}>({ left: "", right: "" });
-	const [workspace, setWorkspace] = useState("");
 
-	// The loaders are static seams (the endpoint fetches in production, fakes
-	// in tests); load once on mount. Refs keep the effect independent of the
+	// The loader is a static seam (the endpoint fetch in production, a fake in
+	// tests); load once on mount. Refs keep the effect independent of the
 	// props' identities so a re-render never re-fetches.
 	const loadModelsRef = useRef(loadModels);
-	const loadWorkspacesRef = useRef(loadWorkspaces);
 	useEffect(() => {
 		let cancelled = false;
-		Promise.all([loadModelsRef.current(), loadWorkspacesRef.current()])
-			.then(([modelData, workspaceRows]) => {
+		loadModelsRef
+			.current()
+			.then((modelData) => {
 				if (cancelled) {
 					return;
 				}
@@ -115,8 +94,6 @@ export function RunConfigForm({
 					left: modelData.defaults.left,
 					right: modelData.defaults.right,
 				});
-				setWorkspaces(workspaceRows);
-				setWorkspace(preselectWorkspace(workspaceRows));
 				setLoadState("ready");
 			})
 			.catch(() => {
@@ -134,7 +111,9 @@ export function RunConfigForm({
 
 	const ready = loadState === "ready";
 	const inputsDisabled = !ready || locked;
-	const canSubmit = ready && workspace !== "" && !locked;
+	// Submit is armed only once a session is selected (parent #37): the run
+	// continues the session picked in the browser, and never starts without one.
+	const canSubmit = ready && sessionId !== undefined && !locked;
 
 	const handleSubmit = (): void => {
 		if (!canSubmit) {
@@ -144,11 +123,7 @@ export function RunConfigForm({
 			task,
 			primaryModel,
 			laneModels: { left: laneModels.left, right: laneModels.right },
-			// The run continues the selected session; the workspace dropdown is
-			// the session picker placeholder until the session browser lands
-			// (ticket #41) — the production factory takes the workspace from the
-			// resumed session's header, never from the request.
-			sessionId: workspace,
+			sessionId,
 		});
 	};
 
@@ -181,22 +156,6 @@ export function RunConfigForm({
 					disabled={inputsDisabled}
 					onChange={setPrimaryModel}
 				/>
-				<div className="flex flex-col gap-1">
-					<WorkspaceSelect
-						id="workspace"
-						label="Workspace"
-						workspaces={workspaces}
-						value={workspace}
-						disabled={inputsDisabled}
-						onChange={setWorkspace}
-					/>
-					{ready && workspaces.length === 0 && (
-						<div id="workspace-hint" className="text-xs text-gray-500">
-							No workspaces in the catalog yet — create one in DSH web. There is
-							no path fallback.
-						</div>
-					)}
-				</div>
 				<button
 					id="submit"
 					type="button"
@@ -216,6 +175,12 @@ export function RunConfigForm({
 					Cancel
 				</button>
 			</div>
+
+			{ready && sessionId === undefined && (
+				<div className="mt-2 text-xs text-gray-500">
+					Select a session to continue — Submit stays disabled until then.
+				</div>
+			)}
 
 			<div className="mt-3 flex flex-wrap items-end gap-3">
 				<ModelSelect

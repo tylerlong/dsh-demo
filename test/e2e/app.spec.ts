@@ -5,51 +5,58 @@ import { expect, test } from "@playwright/test";
  *
  * These pin the actual browser experience: the page must load without console
  * errors, the WebSocket must connect, the model dropdowns must populate from
- * /api/models, the workspace dropdown must populate from the shared registry
- * (/api/workspaces) and preselect the workspace with the most recent session,
- * and a submitted run must start both lanes, stream output, and reach a
- * terminal state (done or canceled) with the UI returning to an unlocked state
- * and no comparison summary (the orchestrator is never invoked).
+ * /api/models, the read-only session tree must populate from /api/sessions
+ * (parent ticket #37) with the latest session preselected, and a submitted run
+ * must continue the selected session, start both lanes, and reach a terminal
+ * state (done or canceled) with the UI returning to an unlocked state and no
+ * comparison summary (the orchestrator is never invoked).
  *
- * The selectors are the React DOM's roles and test ids (the run lifecycle
- * hook, ticket #33, renders the connection status, the run status/output, and
- * the two lanes with data-testid attributes; the form controls are queried by
- * their accessible roles). The workspace picker is a dropdown seeded once on
- * page load from the shared catalog, so these tests need at least one
- * registered workspace in the local harness home (~/.dsh) — the same catalog
- * DSH web shows. The empty-catalog guard is covered by stubbing
- * /api/workspaces with an empty list (see "empty workspace catalog"), because
- * the live shared registry is never empty in a working install. localforage
- * remember/restore no longer exists — the only preselect is the shared session
- * recency, which this file verifies.
+ * The selectors are the React DOM's roles and test ids (the session browser,
+ * ticket #41, renders the workspace → sessions tree, the transcript panel, and
+ * the run form; the run lifecycle hook, ticket #33, renders the connection
+ * status, the run status, and the two lanes with data-testid attributes; the
+ * form controls are queried by their accessible roles). The tree is seeded
+ * once on page load from the shared session store, so these tests need at
+ * least one registered session in the local harness home (~/.dsh) — the same
+ * catalog DSH web shows. The empty-catalog guard is covered by stubbing
+ * /api/sessions with an empty tree (see "empty session catalog"), because the
+ * live shared store is never empty in a working install. The workspace
+ * dropdown no longer exists (parent #37): the run continues the session
+ * selected in the tree, so the form has no workspace picker and submit stays
+ * disabled until a session is selected.
  *
  * LOCAL-ONLY by design: they boot the real app (pnpm serve) against the real
- * harness and --/.dsh credentials, and are not part of CI (CI runs vitest only).
+ * harness and ~/.dsh credentials, and are not part of CI (CI runs vitest only).
  */
 const FAST_TASK = "Reply with the single word: ready";
 
-/** workspace rows as served by /api/workspaces (mirror of WorkspaceOption). */
+/** Session rows as served by /api/sessions (mirror of the SessionTree shape). */
+interface SessionRow {
+	id: string;
+	createdAt: number;
+}
+
 interface WorkspaceRow {
 	id: string;
 	path: string;
 	title: string;
-	newestSessionAt?: number;
+	sessions: SessionRow[];
 }
 
-/** The index the page selects: newest session wins, else the first. */
-function preselectIndex(workspaces: readonly WorkspaceRow[]): number {
-	let pre = -1;
-	let newestAt = -1;
-	workspaces.forEach((w, i) => {
-		if (typeof w.newestSessionAt === "number" && w.newestSessionAt > newestAt) {
-			newestAt = w.newestSessionAt;
-			pre = i;
+/** The latest session across the whole tree (the page's preselect rule). */
+function latestSession(tree: readonly WorkspaceRow[]): SessionRow | undefined {
+	let latest: SessionRow | undefined;
+	for (const workspace of tree) {
+		for (const session of workspace.sessions) {
+			if (latest === undefined || session.createdAt > latest.createdAt) {
+				latest = session;
+			}
 		}
-	});
-	return pre >= 0 ? pre : 0;
+	}
+	return latest;
 }
 
-test("page loads, WS connects, dropdowns populate, no console errors", async ({
+test("page loads, WS connects, model dropdowns populate, session tree renders, no console errors", async ({
 	page,
 }) => {
 	const errors: string[] = [];
@@ -76,19 +83,26 @@ test("page loads, WS connects, dropdowns populate, no console errors", async ({
 		page.getByRole("combobox", { name: "Right lane model" }).locator("option"),
 	).toHaveCount(primaryCount);
 
-	// The workspace dropdown is seeded from the shared registry: one option per
-	// /api/workspaces row, each carrying that workspace's canonical path.
-	const workspaces = (await (
-		await page.request.get("/api/workspaces")
+	// The session tree is seeded from the shared store: one row per session,
+	// labeled by id, under its workspace.
+	const tree = (await (
+		await page.request.get("/api/sessions")
 	).json()) as readonly WorkspaceRow[];
-	expect(workspaces.length).toBeGreaterThan(0);
-	const workspace = page.getByRole("combobox", { name: "Workspace" });
-	const workspaceOptions = workspace.locator("option");
-	await expect(workspaceOptions).toHaveCount(workspaces.length);
-	const optionPaths = await workspaceOptions.evaluateAll((els) =>
-		els.map((el) => (el as HTMLOptionElement).value),
-	);
-	expect(optionPaths).toEqual(workspaces.map((w) => w.path));
+	expect(tree.length).toBeGreaterThan(0);
+	const allSessions = tree.flatMap((w) => w.sessions);
+	expect(allSessions.length).toBeGreaterThan(0);
+	for (const session of allSessions) {
+		await expect(
+			page.getByTestId(`session-row-${session.id}`),
+		).toBeVisible();
+	}
+
+	// The workspace dropdown is gone (parent #37): no workspace picker.
+	await expect(
+		page.getByRole("combobox", { name: "Workspace" }),
+	).not.toBeVisible();
+
+	// The latest session is preselected, so submit is usable.
 	await expect(page.getByRole("button", { name: "Submit" })).toBeEnabled();
 
 	// No console or page errors — a syntax error in the served script would
@@ -96,27 +110,7 @@ test("page loads, WS connects, dropdowns populate, no console errors", async ({
 	expect(errors).toEqual([]);
 });
 
-test("preselects the workspace with the most recently used session", async ({
-	page,
-}) => {
-	await page.goto("/");
-	await expect(page.getByTestId("conn-status")).toHaveText("connected", {
-		timeout: 15_000,
-	});
-
-	// Wait for the dropdown to be seeded, then confirm the preselected option is
-	// exactly the one the page's recency rule picks (newest session, else first).
-	const workspaces = (await (
-		await page.request.get("/api/workspaces")
-	).json()) as readonly WorkspaceRow[];
-	expect(workspaces.length).toBeGreaterThan(0);
-	const workspace = page.getByRole("combobox", { name: "Workspace" });
-	await expect(workspace.locator("option")).toHaveCount(workspaces.length);
-	const expected = workspaces[preselectIndex(workspaces)]!.path;
-	await expect(workspace).toHaveValue(expected);
-});
-
-test("submit runs the full comparison: both lanes done, no summary, inputs unlock", async ({
+test("preselects the latest session and continues it through the run form", async ({
 	page,
 }) => {
 	const errors: string[] = [];
@@ -127,10 +121,20 @@ test("submit runs the full comparison: both lanes done, no summary, inputs unloc
 		timeout: 15_000,
 	});
 
+	// The tree renders; the latest session is preselected and highlighted.
+	const tree = (await (
+		await page.request.get("/api/sessions")
+	).json()) as readonly WorkspaceRow[];
+	const latest = latestSession(tree);
+	expect(latest).toBeDefined();
+	if (latest === undefined) throw new Error("expected a session in the tree");
+	await expect(
+		page.getByTestId(`session-row-${latest.id}`),
+	).toHaveAttribute("aria-selected", "true");
+
+	// The task field starts empty; typing arms the run on the selected session.
+	await expect(page.getByLabel("Task")).toHaveValue("");
 	await page.getByLabel("Task").fill(FAST_TASK);
-	await page.getByRole("combobox", { name: "Workspace" }).selectOption({
-		index: 0,
-	});
 	await expect(page.getByRole("button", { name: "Submit" })).toBeEnabled();
 	await page.getByRole("button", { name: "Submit" }).click();
 
@@ -144,16 +148,45 @@ test("submit runs the full comparison: both lanes done, no summary, inputs unloc
 	await expect(page.getByTestId("lane-left-status")).toContainText("done");
 	await expect(page.getByTestId("lane-right-status")).toContainText("done");
 
-	// The top section shows the run-level spawn notice, not a model summary
-	// (no run/summary is produced; the orchestrator is never invoked).
-	const primaryOutput = await page.getByTestId("primary-output").textContent();
-	expect(primaryOutput ?? "").not.toBe("");
+	// The transcript panel shows the continued session's output read from the
+	// store (parent #37): the primary agent's panel is populated.
+	await expect(page.getByTestId("transcript-primary")).not.toBeEmpty({
+		timeout: 30_000,
+	});
 
 	// Inputs are unlocked again after the run.
 	await expect(page.getByLabel("Task")).toBeEnabled();
 	await expect(page.getByRole("button", { name: "Submit" })).toBeEnabled();
 
 	expect(errors).toEqual([]);
+});
+
+test("walking the tree switches the transcript and the watched session", async ({
+	page,
+}) => {
+	await page.goto("/");
+	await expect(page.getByTestId("conn-status")).toHaveText("connected", {
+		timeout: 15_000,
+	});
+
+	const tree = (await (
+		await page.request.get("/api/sessions")
+	).json()) as readonly WorkspaceRow[];
+	const allSessions = tree.flatMap((w) => w.sessions);
+	expect(allSessions.length).toBeGreaterThan(1);
+
+	// Click a non-latest session: its row highlights and the transcript panel
+	// shows that session's output.
+	const target = allSessions.find((s) => s.id !== latestSession(tree)?.id);
+	expect(target).toBeDefined();
+	if (target === undefined) throw new Error("expected a second session");
+	await page.getByTestId(`session-row-${target.id}`).click();
+	await expect(
+		page.getByTestId(`session-row-${target.id}`),
+	).toHaveAttribute("aria-selected", "true");
+	await expect(page.getByTestId("transcript-session")).toContainText(
+		target.id,
+	);
 });
 
 test("cancel aborts a running comparison and returns the UI to idle", async ({
@@ -170,9 +203,7 @@ test("cancel aborts a running comparison and returns the UI to idle", async ({
 	const LONG_TASK =
 		"Write a detailed 1000-word essay about the history of computing from 1940 to the present, covering hardware, software, and the internet.";
 	await page.getByLabel("Task").fill(LONG_TASK);
-	await page.getByRole("combobox", { name: "Workspace" }).selectOption({
-		index: 0,
-	});
+	await expect(page.getByRole("button", { name: "Submit" })).toBeEnabled();
 	await page.getByRole("button", { name: "Submit" }).click();
 
 	// Both lanes start (running chips) — the run is genuinely in progress.
@@ -194,14 +225,14 @@ test("cancel aborts a running comparison and returns the UI to idle", async ({
 	expect(errors).toEqual([]);
 });
 
-test("empty workspace catalog disables submit and shows the hint", async ({
+test("empty session catalog disables submit and shows the hint", async ({
 	page,
 }) => {
-	// The live shared registry is never empty in a working install, so stub the
-	// seam at the browser level: the page receives zero workspaces from
-	// /api/workspaces. No server code changes; model loading still hits the real
+	// The live shared store is never empty in a working install, so stub the
+	// seam at the browser level: the page receives an empty tree from
+	// /api/sessions. No server code changes; model loading still hits the real
 	// endpoint. This is the same empty-catalog state the page must survive.
-	await page.route("**/api/workspaces", (route) =>
+	await page.route("**/api/sessions", (route) =>
 		route.fulfill({ status: 200, json: [] }),
 	);
 
@@ -213,17 +244,13 @@ test("empty workspace catalog disables submit and shows the hint", async ({
 		timeout: 15_000,
 	});
 
-	// No workspace options at all.
-	const workspace = page.getByRole("combobox", { name: "Workspace" });
-	await expect(workspace.locator("option")).toHaveCount(0);
-
-	// The hint explains the catalog lives in DSH web and there is no fallback.
+	// No session rows at all; the hint explains the catalog is empty.
 	await expect(
 		page.getByText(/No workspaces in the catalog yet/),
 	).toBeVisible();
 
 	// Submit stays disabled, even after typing a task (no free-text path
-	// fallback: a run cannot start without a picked workspace).
+	// fallback: a run cannot start without a selected session).
 	const submit = page.getByRole("button", { name: "Submit" });
 	await expect(submit).toBeDisabled();
 	await page.getByLabel("Task").fill(FAST_TASK);

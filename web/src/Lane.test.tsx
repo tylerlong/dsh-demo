@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 /**
- * Lane.test.tsx — component tests for the lane component (ticket #33).
+ * Lane.test.tsx — component tests for the lane component (ticket #33, parent #37).
  *
- * The lane renders one side of the comparison: its heading, the worker's
- * status chip (idle / running · Ns / done · Ns / error · Ns / canceled · Ns),
- * and the streamed output panel. The run lifecycle hook owns the lane state;
- * these tests pin the rendering the user sees — chip text per status and the
- * streamed output — never component internals.
+ * The lane renders one side of the comparison: its heading and the worker's
+ * status chip (idle / running · Ns / done · Ns / error · Ns / canceled · Ns).
+ * The run lifecycle hook owns the lane state; these tests pin the rendering
+ * the user sees — chip text per status — never component internals. The lane
+ * worker's output panel is gone (parent #37): output is read from the store
+ * in the transcript panel, not streamed here.
  */
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
@@ -18,7 +19,6 @@ function renderLane(overrides: Partial<LaneProps> = {}) {
 			laneId="left"
 			heading="Left lane"
 			status="idle"
-			output=""
 			elapsed={0}
 			{...overrides}
 		/>,
@@ -26,21 +26,19 @@ function renderLane(overrides: Partial<LaneProps> = {}) {
 }
 
 describe("Lane", () => {
-	it("renders the heading, an idle lane shows no chip, and an empty output panel", () => {
+	it("renders the heading; an idle lane shows no chip", () => {
 		renderLane();
 		expect(
 			screen.getByRole("heading", { name: "Left lane" }),
 		).toBeInTheDocument();
 		expect(screen.getByTestId("lane-left-status")).toHaveTextContent("");
-		expect(screen.getByTestId("lane-left-output")).toHaveTextContent("");
 	});
 
-	it("shows the running chip with elapsed seconds and the streamed output", () => {
-		renderLane({ status: "running", elapsed: 3, output: "the sea" });
+	it("shows the running chip with elapsed seconds", () => {
+		renderLane({ status: "running", elapsed: 3 });
 		expect(screen.getByTestId("lane-left-status")).toHaveTextContent(
 			"running · 3s",
 		);
-		expect(screen.getByTestId("lane-left-output")).toHaveTextContent("the sea");
 	});
 
 	it("shows each terminal chip with its elapsed seconds", () => {
@@ -50,13 +48,7 @@ describe("Lane", () => {
 		);
 
 		rerender(
-			<Lane
-				laneId="left"
-				heading="Left lane"
-				status="error"
-				output=""
-				elapsed={2}
-			/>,
+			<Lane laneId="left" heading="Left lane" status="error" elapsed={2} />,
 		);
 		expect(screen.getByTestId("lane-left-status")).toHaveTextContent(
 			"error · 2s",
@@ -67,7 +59,6 @@ describe("Lane", () => {
 				laneId="left"
 				heading="Left lane"
 				status="canceled"
-				output=""
 				elapsed={4}
 			/>,
 		);
