@@ -7,7 +7,10 @@
  * + WebSocket), injecting a fixed model list instead of booting the harness.
  * The run lifecycle (submit/cancel over the socket) is ticket #4.
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import {
 	createScriptedRunFactory,
@@ -66,6 +69,7 @@ async function start(
 
 afterEach(async () => {
 	await Promise.all(live.splice(0).map((handle) => handle.close()));
+	if (WORKSPACE !== "") rmSync(WORKSPACE, { recursive: true, force: true });
 });
 
 describe("server boot", () => {
@@ -177,8 +181,20 @@ function baseRequest(task: string): RunRequest {
 			left: "deepseek/deepseek-v4-flash-0731",
 			right: "openai/gpt-5.6-luna",
 		},
+		workspace: WORKSPACE,
 	};
 }
+
+/**
+ * A valid existing folder used as every run workspace in this file; the
+ * scripted fake factory requires the folder to exist. Recreated fresh before
+ * each test so one run (or its cleanup) never leaves the next with a stale,
+ * now-removed path.
+ */
+let WORKSPACE = "";
+beforeEach(() => {
+	WORKSPACE = mkdtempSync(join(tmpdir(), "dsh-ws-"));
+});
 
 function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));

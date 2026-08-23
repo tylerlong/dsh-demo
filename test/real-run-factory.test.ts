@@ -5,11 +5,11 @@
  * subagents.start, session event watching, cancellation). These tests drive it
  * against a fake harness context — a fake llm registry, agent factory, and
  * subagent provider — so no real model call or harness boot is involved. They
- * pin the orchestration shape (orchestrator on the primary model, two
- * read-only workers on the lane models), the event translation (session text
- * deltas → lane/worker/delta, completion → lane/worker/done,
- * summary → run/summary, cancel → run/canceled), and the read-only tool
- * filter.
+ * pin the orchestration shape (orchestrator on the primary model with the run
+ * workspace as its session cwd, two read-only workers on the lane models), the
+ * event translation (session text deltas → lane/worker/delta, completion →
+ * lane/worker/done, run/done once both lanes settle, cancel → run/canceled),
+ * and the read-only tool filter.
  */
 
 import type { Context } from "@deepseek-ai/cordis";
@@ -28,6 +28,9 @@ const MODELS = [
 	{ provider: "openrouter", id: "openai/gpt-5.6-luna", name: "GPT 5.6 Luna" },
 ];
 
+/** A workspace folder the run agents act on. */
+const WORKSPACE = "/tmp/dsh-compare-workspace";
+
 const REQUEST: RunRequest = {
 	task: "Compare the sea and the sky",
 	primaryModel: "deepseek/deepseek-v4-flash-0731",
@@ -35,9 +38,10 @@ const REQUEST: RunRequest = {
 		left: "deepseek/deepseek-v4-flash-0731",
 		right: "openai/gpt-5.6-luna",
 	},
+	workspace: WORKSPACE,
 };
 
-/** A promise the test resolves to settle a spawned run's result. */
+/** A promise the test resolves to settle a spawned run result. */
 function deferred<T>(): {
 	promise: Promise<T>;
 	resolve: (value: T) => void;
@@ -70,9 +74,7 @@ interface FakeHarness {
 	created: CreatedAgent[];
 	spawned: SpawnedRun[];
 	sessionListeners: Array<(session: { id: string }, event: unknown) => void>;
-	// The orchestrator agent's session events (the factory reads the summary).
-	orchestratorEvents: Array<Record<string, unknown>>;
-	followups: string[];
+	orchestratorCalls: { whenIdle: number; followup: number; cancel: number };
 }
 
 /** Build a fake harness context the factory can drive. */
@@ -80,8 +82,7 @@ function makeHarness(models: typeof MODELS = MODELS): FakeHarness {
 	const created: CreatedAgent[] = [];
 	const spawned: SpawnedRun[] = [];
 	const sessionListeners: FakeHarness["sessionListeners"] = [];
-	let orchestratorEvents: Array<Record<string, unknown>> = [];
-	const followups: string[] = [];
+	const orchestratorCalls = { whenIdle: 0, followup: 0, cancel: 0 };
 
 	let spawnSeq = 0;
 	const context = {
@@ -91,22 +92,20 @@ function makeHarness(models: typeof MODELS = MODELS): FakeHarness {
 		},
 		agents: {
 			create: async (opts: Record<string, unknown>) => {
-				const session = {
-					id: "session-orchestrator",
-					// Live view: the test replaces the array to stage the summary.
-					get events() {
-						return orchestratorEvents;
-					},
-				};
+				const session = { id: "session-orchestrator", events: [] };
 				const agent = {
 					id: session.id,
 					options: { provider: "openrouter" },
 					session,
-					whenIdle: vi.fn().mockResolvedValue(undefined),
-					cancel: vi.fn(),
-					followup: vi.fn((message: { content?: Array<{ text?: string }> }) => {
-						const text = message.content?.[0]?.text ?? "";
-						followups.push(text);
+					whenIdle: vi.fn(() => {
+						orchestratorCalls.whenIdle += 1;
+						return Promise.resolve(undefined);
+					}),
+					cancel: vi.fn(() => {
+						orchestratorCalls.cancel += 1;
+					}),
+					followup: vi.fn(() => {
+						orchestratorCalls.followup += 1;
 					}),
 					ctx: {},
 				};
@@ -148,13 +147,7 @@ function makeHarness(models: typeof MODELS = MODELS): FakeHarness {
 		created,
 		spawned,
 		sessionListeners,
-		get orchestratorEvents() {
-			return orchestratorEvents;
-		},
-		set orchestratorEvents(value) {
-			orchestratorEvents = value;
-		},
-		followups,
+		orchestratorCalls,
 	};
 }
 
@@ -184,7 +177,7 @@ function startRun(
 }
 
 describe("real run factory", () => {
-	it("creates the orchestrator on the primary model and spawns two concurrent read-only workers", async () => {
+	it("creates the orchestrator on the primary model (workspace cwd) and spawns two concurrent read-only workers", async () => {
 		const harness = makeHarness();
 		const { events } = startRun(harness);
 		expect(events[0]).toEqual({
@@ -197,9 +190,12 @@ describe("real run factory", () => {
 
 		const createOpts = harness.created[0]?.opts as {
 			agentOptions: { provider: string; model: string };
+			meta: { cwd: string };
 		};
 		expect(createOpts.agentOptions.provider).toBe("openrouter");
 		expect(createOpts.agentOptions.model).toBe(REQUEST.primaryModel);
+		// The orchestrator session cwd is the run workspace (parent #9).
+		expect(createOpts.meta).toEqual({ cwd: WORKSPACE });
 
 		const calls = harness.spawned;
 		const toolFilters = calls.map(
@@ -228,7 +224,7 @@ describe("real run factory", () => {
 
 		const left = harness.spawned[0] as SpawnedRun;
 		const right = harness.spawned[1] as SpawnedRun;
-		// The factory watches by the child's session id.
+		// The factory watches by the child session id.
 		for (const listener of harness.sessionListeners) {
 			listener(
 				{ id: left.run.id },
@@ -269,19 +265,10 @@ describe("real run factory", () => {
 		});
 	});
 
-	it("emits lane/worker/done for both, a run/summary, and run/done when both workers complete", async () => {
+	it("emits lane/worker/done for both and run/done (no run/summary) when both workers complete", async () => {
 		const harness = makeHarness();
 		const { events } = startRun(harness);
 		await waitUntil(() => harness.spawned.length === 2);
-
-		harness.orchestratorEvents = [
-			{
-				type: "assistant/message",
-				data: {
-					message: { content: [{ type: "text", text: "The sea wins." }] },
-				},
-			},
-		];
 
 		harness.spawned[0]?.settle({
 			output: [{ type: "text", text: "quiet" }],
@@ -303,29 +290,24 @@ describe("real run factory", () => {
 		expect(leftDone).toEqual({ type: "lane/worker/done", laneId: "left" });
 		expect(rightDone).toEqual({ type: "lane/worker/done", laneId: "right" });
 
-		const summary = events.find((e) => e.type === "run/summary");
-		expect(summary).toEqual({ type: "run/summary", summary: "The sea wins." });
+		// No run/summary: the run ends with run/done as soon as both lanes settle.
+		expect(
+			events.some((e) => (e as { type: string }).type === "run/summary"),
+		).toBe(false);
 		expect(events.at(-1)).toEqual({
 			type: "run/done",
 			runId: expect.any(String),
 		});
 
-		// The orchestrator summary prompt quoted both workers' answers.
-		expect(harness.followups.join("\n")).toContain("quiet");
-		expect(harness.followups.join("\n")).toContain("bright");
+		// The orchestrator is never invoked (no summary; model selection retained).
+		expect(harness.orchestratorCalls.followup).toBe(0);
+		expect(harness.orchestratorCalls.whenIdle).toBe(0);
 	});
 
 	it("a failed worker errors its own lane without killing the other lane or the run", async () => {
 		const harness = makeHarness();
 		const { events } = startRun(harness);
 		await waitUntil(() => harness.spawned.length === 2);
-
-		harness.orchestratorEvents = [
-			{
-				type: "assistant/message",
-				data: { message: { content: [{ type: "text", text: "summary" }] } },
-			},
-		];
 
 		harness.spawned[0]?.settle({ output: [], stopReason: "completed" });
 		harness.spawned[1]?.settle({ output: [], stopReason: "error" });
@@ -341,7 +323,13 @@ describe("real run factory", () => {
 		expect(
 			events.some((e) => e.type === "lane/worker/done" && e.laneId === "left"),
 		).toBe(true);
-		expect(events.some((e) => e.type === "run/summary")).toBe(true);
+		expect(
+			events.some((e) => (e as { type: string }).type === "run/summary"),
+		).toBe(false);
+		expect(events.at(-1)).toEqual({
+			type: "run/done",
+			runId: expect.any(String),
+		});
 	});
 
 	it("cancel aborts the orchestrator and both workers and emits run/canceled", async () => {
@@ -365,9 +353,9 @@ describe("real run factory", () => {
 	});
 
 	it("a bad lane model id errors only its lane while the other lane keeps running", async () => {
-		// Only the left lane's model is configured; the right lane's id is
+		// Only the left lane model is configured; the right lane id is
 		// unresolvable. The right lane must error on its own while the left
-		// lane still runs and the run reaches a summary + done (parent story 20).
+		// lane still runs and the run reaches done (parent story 20).
 		const harness = makeHarness([MODELS[0] as (typeof MODELS)[number]]);
 		const request: RunRequest = {
 			...REQUEST,
@@ -386,13 +374,7 @@ describe("real run factory", () => {
 			),
 		).toBe(true);
 
-		// Settle the left worker so the run reaches a summary + done.
-		harness.orchestratorEvents = [
-			{
-				type: "assistant/message",
-				data: { message: { content: [{ type: "text", text: "summary" }] } },
-			},
-		];
+		// Settle the left worker so the run reaches done.
 		harness.spawned[0]?.settle({ output: [], stopReason: "completed" });
 
 		await waitUntil(() => events.some((e) => e.type === "run/done"));
@@ -401,10 +383,12 @@ describe("real run factory", () => {
 		expect(
 			events.some((e) => e.type === "lane/worker/done" && e.laneId === "left"),
 		).toBe(true);
-		// Only the right lane errored; the run still produced a summary + done.
+		// Only the right lane errored; the run still reached done.
 		const errors = events.filter((e) => e.type === "lane/worker/error");
 		expect(errors.length).toBe(1);
-		expect(events.some((e) => e.type === "run/summary")).toBe(true);
+		expect(
+			events.some((e) => (e as { type: string }).type === "run/summary"),
+		).toBe(false);
 		expect(events.at(-1)).toEqual({
 			type: "run/done",
 			runId: expect.any(String),

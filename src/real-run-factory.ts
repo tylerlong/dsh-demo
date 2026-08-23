@@ -7,13 +7,15 @@
  *   1. resolves the harness provider route for every requested model id from
  *      the same configured model list the dropdowns use (model-list.ts),
  *   2. creates the **orchestrator** (the primary agent) on the requested
- *      primary model,
+ *      primary model with the run workspace as its session cwd (the spawned
+ *      workers inherit it, so every agent in the run reads the same folder),
  *   3. spawns the two **workers** concurrently — one per lane, each on its
  *      lane's model — restricted to the read-only tool filter (read,
  *      read_image, glob, grep) so concurrent lanes never conflict over edits
  *      (ADR-0001),
  *   4. routes real session events to the owning lane (text deltas) and the
- *      top section (spawn notice, final comparison summary), and
+ *      top section (spawn notice), and emits run/done as soon as both lanes
+ *      settle (each done or errored), and
  *   5. supports real cancellation: one Cancel aborts the shared
  *      AbortController, stops the orchestrator and both workers, and emits
  *      run/canceled.
@@ -25,15 +27,10 @@
 import { randomUUID } from "node:crypto";
 import type { Context } from "@deepseek-ai/cordis";
 import type { Agent, AgentHandle } from "@deepseek-ai/dsh-agent";
-import { type ContentBlock, createUserMessage } from "@deepseek-ai/dsh-llm";
 import { SessionId } from "@deepseek-ai/dsh-session";
-import {
-	finalAssistantOutput,
-	type SubagentResult,
-	type SubagentRun,
-} from "@deepseek-ai/dsh-subagent";
+import type { SubagentResult, SubagentRun } from "@deepseek-ai/dsh-subagent";
 import { convertLlmModels, type LlmLike } from "./model-list.ts";
-import type { LaneId, RunEvent, RunRequest, StartRun } from "./run-factory.ts";
+import type { LaneId, RunEvent, StartRun } from "./run-factory.ts";
 
 /** The subagent provider that spawns in-process children (see the demos). */
 const SPAWN_PROVIDER = "spawn";
@@ -50,23 +47,7 @@ function messageOf(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
-/** Join the text blocks of an assistant output into one string. */
-function textOf(blocks: readonly ContentBlock[]): string {
-	return blocks
-		.filter((block) => block.type === "text")
-		.map((block) => block.text)
-		.join("");
-}
-
-/** A lane worker's settled outcome, fed into the orchestrator's summary. */
-interface LaneOutcome {
-	readonly lane: LaneId;
-	readonly model: string;
-	/** The worker's final answer text, or an error note when it failed. */
-	readonly text: string;
-}
-
-/** One lane worker's prompt: the task, performed read-only, free-form answer. */
+/** One lane worker prompt: the task, performed read-only, free-form answer. */
 function workerPrompt(task: string): string {
 	return [
 		"You are a read-only worker in a two-model comparison run.",
@@ -75,28 +56,6 @@ function workerPrompt(task: string): string {
 		"When you are finished, reply with your answer as free-form text.",
 		"",
 		`TASK: ${task}`,
-	].join("\n");
-}
-
-/** The orchestrator's summary prompt: both answers, ask for a comparison. */
-function summaryPrompt(
-	request: RunRequest,
-	left: LaneOutcome | undefined,
-	right: LaneOutcome | undefined,
-): string {
-	const lane = (outcome: LaneOutcome | undefined, label: string): string =>
-		outcome === undefined
-			? `${label}: (no result)`
-			: `${label} (${outcome.model}):\n${outcome.text}`;
-	return [
-		`The two workers finished the task: "${request.task}".`,
-		"",
-		lane(left, "Left lane"),
-		"",
-		lane(right, "Right lane"),
-		"",
-		"Write a short comparison summary: how did the two answers differ, and which model handled the task better and why?",
-		"Reply with your summary as free-form text.",
 	].join("\n");
 }
 
@@ -145,10 +104,10 @@ function watchSession(
  *
  * Each {@link StartRun} call emits run/started synchronously (so the tab locks
  * its inputs immediately), then drives the whole comparison in the
- * background: orchestrator creation, concurrent read-only workers, the
- * orchestrator's comparison summary, and teardown. The returned handle's
- * cancel() aborts the shared controller, stops the orchestrator and both
- * workers, and emits run/canceled.
+ * background: orchestrator creation (workspace session cwd), concurrent
+ * read-only workers, and teardown. The run ends with run/done as soon as
+ * both lanes settle. The returned handle cancel() aborts the shared
+ * controller, stops the orchestrator and both workers, and emits run/canceled.
  */
 export function createRunFactory(ctx: Context): StartRun {
 	return (request, onEvent) => {
@@ -179,13 +138,13 @@ export function createRunFactory(ctx: Context): StartRun {
 			}
 		};
 
-		/** Run one lane's read-only worker and settle its outcome. */
+		/** Run one lane read-only worker and settle its lane (done or error). */
 		const runWorker = async (
 			lane: LaneId,
 			model: string,
 			providers: Map<string, string>,
 			orchestrator: Agent,
-		): Promise<LaneOutcome> => {
+		): Promise<void> => {
 			emit({ type: "lane/worker/started", laneId: lane });
 			try {
 				// Resolve this lane's provider lazily so a bad model id errors
@@ -212,22 +171,13 @@ export function createRunFactory(ctx: Context): StartRun {
 				});
 				try {
 					const result = await run.result;
-					if (controller.signal.aborted) {
-						return { lane, model, text: "" };
-					}
+					if (controller.signal.aborted) return;
 					if (result.stopReason === "completed") {
 						emit({ type: "lane/worker/done", laneId: lane });
-						return { lane, model, text: textOf(result.output) };
+						return;
 					}
 					const reason = workerFailureReason(result);
 					emit({ type: "lane/worker/error", laneId: lane, reason });
-					// The reason stays server-side (console only); the summary
-					// prompt gets a neutral note so it never reaches the UI.
-					return {
-						lane,
-						model,
-						text: `(${lane} lane worker failed)`,
-					};
 				} finally {
 					stopWatching();
 					// Dispose exactly once: drop the run from the shared list
@@ -238,22 +188,13 @@ export function createRunFactory(ctx: Context): StartRun {
 					await run.dispose().catch(() => {});
 				}
 			} catch (error) {
-				if (controller.signal.aborted) {
-					return { lane, model, text: "" };
-				}
+				if (controller.signal.aborted) return;
 				const reason = messageOf(error);
 				emit({ type: "lane/worker/error", laneId: lane, reason });
-				// The reason stays server-side (console only); the summary
-				// prompt gets a neutral note so it never reaches the UI.
-				return {
-					lane,
-					model,
-					text: `(${lane} lane worker failed)`,
-				};
 			}
 		};
 
-		/** The whole comparison: orchestrator, workers, summary, teardown. */
+		/** The whole comparison: orchestrator, workers, teardown. */
 		const orchestrate = async (): Promise<void> => {
 			const providers = await resolveProviders(ctx);
 			const primaryProvider = providers.get(request.primaryModel);
@@ -265,10 +206,11 @@ export function createRunFactory(ctx: Context): StartRun {
 				);
 			}
 
-			// The orchestrator (primary agent) on the requested model.
+			// The orchestrator (primary agent) on the requested model; its session
+			// cwd is the run workspace so spawned workers inherit it.
 			const handle = await ctx.agents.create({
 				sessionId: SessionId(`session-${runId}`),
-				meta: { cwd: process.cwd() },
+				meta: { cwd: request.workspace },
 				agentOptions: {
 					provider: primaryProvider,
 					model: request.primaryModel,
@@ -285,40 +227,14 @@ export function createRunFactory(ctx: Context): StartRun {
 
 			// Both workers run concurrently; each lane settles independently.
 			lanesStarted = true;
-			const [left, right] = await Promise.all([
+			await Promise.all([
 				runWorker("left", request.laneModels.left, providers, orchestrator),
 				runWorker("right", request.laneModels.right, providers, orchestrator),
 			]);
 			if (controller.signal.aborted) return;
 
-			// The orchestrator compares both answers and produces the summary.
-			const summary = await summarize(orchestrator, request, left, right);
-			if (controller.signal.aborted) return;
-			if (summary !== "") emit({ type: "run/summary", summary });
+			// The run ends as soon as both lanes settle; no run/summary.
 			emit({ type: "run/done", runId });
-		};
-
-		/** Ask the orchestrator for the comparison summary and read its answer. */
-		const summarize = async (
-			orchestrator: Agent,
-			request: RunRequest,
-			left: LaneOutcome,
-			right: LaneOutcome,
-		): Promise<string> => {
-			orchestrator.followup(
-				createUserMessage({
-					content: [
-						{
-							type: "text",
-							text: summaryPrompt(request, left, right),
-						},
-					],
-					source: { kind: "user" },
-				}),
-			);
-			await orchestrator.whenIdle();
-			const output = finalAssistantOutput(orchestrator.session.events);
-			return output === undefined ? "" : textOf(output);
 		};
 
 		// The run's background drive; failures become lane errors + run/done

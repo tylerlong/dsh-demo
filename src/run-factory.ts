@@ -11,12 +11,19 @@
  * its output panel); the **orchestrator** is the primary agent that spawns
  * the two lane workers. Identifiers use this run / lane / worker /
  * orchestrator vocabulary.
+ *
+ * The scripted fake factory here mirrors the run final contract: a run
+ * carries a **workspace** (the folder its agents may read), ends with
+ * run/done as soon as both lanes settle (each done or errored), never
+ * emits run/summary, and rejects a run whose workspace is not a valid folder
+ * with both lanes erroring and run/done.
  */
+import { statSync } from "node:fs";
 
 /** Identifies which lane a worker belongs to. */
 export type LaneId = "left" | "right";
 
-/** One worker's lifecycle status, shown as a status chip per lane. */
+/** One worker lifecycle status, shown as a status chip per lane. */
 export type LaneStatus = "running" | "done" | "error";
 
 /** The configuration for one comparison run. */
@@ -25,11 +32,17 @@ export interface RunRequest {
 	task: string;
 	/** The model the orchestrator (primary agent) runs on. */
 	primaryModel: string;
-	/** The model each lane's worker runs on. */
+	/** The model each lane worker runs on. */
 	laneModels: Record<LaneId, string>;
+	/**
+	 * The workspace folder the run agents (orchestrator and both workers) may
+	 * read for context. A run whose workspace is not a valid folder fails
+	 * immediately: both lanes error and the run ends before any worker starts.
+	 */
+	workspace: string;
 }
 
-/** Opaque handle to a started run; lives for the run's whole lifetime. */
+/** Opaque handle to a started run; lives for the run whole lifetime. */
 export interface RunHandle {
 	/** Stable id for this run. */
 	readonly id: string;
@@ -43,32 +56,32 @@ export interface RunStartedEvent {
 	runId: string;
 }
 
-/** A text delta for the top section (orchestrator spawn notices / output / summary). */
+/** A text delta for the top section (orchestrator spawn notices / output). */
 export interface OrchestratorDeltaEvent {
 	type: "orchestrator/delta";
 	text: string;
 }
 
-/** A lane's worker has begun working. */
+/** A lane worker has begun working. */
 export interface LaneWorkerStartedEvent {
 	type: "lane/worker/started";
 	laneId: LaneId;
 }
 
-/** A text delta from one lane's worker. */
+/** A text delta from one lane worker. */
 export interface LaneWorkerDeltaEvent {
 	type: "lane/worker/delta";
 	laneId: LaneId;
 	text: string;
 }
 
-/** One lane's worker has completed its answer. */
+/** One lane worker has completed its answer. */
 export interface LaneWorkerDoneEvent {
 	type: "lane/worker/done";
 	laneId: LaneId;
 }
 
-/** One lane's worker failed (bad model, rate limit, provider). */
+/** One lane worker failed (bad model, rate limit, provider). */
 export interface LaneWorkerErrorEvent {
 	type: "lane/worker/error";
 	laneId: LaneId;
@@ -77,12 +90,6 @@ export interface LaneWorkerErrorEvent {
 	 * (the lane just shows an error status chip).
 	 */
 	reason: string;
-}
-
-/** The orchestrator produced its final comparison summary. */
-export interface RunSummaryEvent {
-	type: "run/summary";
-	summary: string;
 }
 
 /** The whole run completed successfully. */
@@ -98,11 +105,12 @@ export interface RunCanceledEvent {
 }
 
 /**
- * The run's event/message vocabulary, delivered through its onEvent sink.
+ * The run event/message vocabulary, delivered through its onEvent sink.
  *
  * Lane events carry a laneId so the server can route each to the owning lane
  * panel; orchestrator events target the top section; run lifecycle events
- * describe the whole run. This is the contract the browser UI + #3 build on.
+ * describe the whole run. There is no run/summary: the run ends with run/done
+ * as soon as both lanes settle. This is the contract the browser UI builds on.
  */
 export type RunEvent =
 	| RunStartedEvent
@@ -111,7 +119,6 @@ export type RunEvent =
 	| LaneWorkerDeltaEvent
 	| LaneWorkerDoneEvent
 	| LaneWorkerErrorEvent
-	| RunSummaryEvent
 	| RunDoneEvent
 	| RunCanceledEvent;
 
@@ -119,7 +126,7 @@ export type RunEvent =
 export type RunEventListener = (event: RunEvent) => void;
 
 /**
- * The run factory seam: the server's only dependency on orchestration.
+ * The run factory seam: the server only dependency on orchestration.
  * A single injected function, so production hands it the harness-backed
  * entry and tests hand it a scripted fake.
  */
@@ -137,7 +144,7 @@ export interface ScriptedRun {
 	/** Whether cancel() was invoked on the handle. */
 	readonly canceled: boolean;
 	/**
-	 * Deliver a scripted event through the run's onEvent sink, exactly as the
+	 * Deliver a scripted event through the run onEvent sink, exactly as the
 	 * production factory would emit it. Tests call this to simulate the run
 	 * streaming output, failing, or completing.
 	 */
@@ -157,16 +164,29 @@ export interface ScriptedRunFactory {
 	readonly lastRun: ScriptedRun | undefined;
 }
 
+/** Whether a path is an existing folder (the workspace must be one). */
+function isValidWorkspaceFolder(path: string): boolean {
+	try {
+		return statSync(path).isDirectory();
+	} catch {
+		return false;
+	}
+}
+
 /**
  * Build a scripted fake run factory.
  *
  * Each startRun call:
  *   1. records the request and the given onEvent sink,
  *   2. produces a run handle (stable incremental id; cancel marks it canceled),
- *   3. emits the run's initial run/started event.
+ *   3. emits the run initial run/started event; a run whose workspace is not
+ *      a valid folder then fails immediately: both lanes error and the run
+ *      ends (run/done) before any worker starts.
+ *   4. re-emits lane events and, once both lanes settle (each done or
+ *      errored), emits a single run/done. run/summary is never emitted.
  *
  * Tests inject the factory where the server expects a StartRun, then drive
- * the returned runs' emit() and handle.cancel() to script behavior.
+ * the returned runs emit() and handle.cancel() to script behavior.
  */
 export function createScriptedRunFactory(): ScriptedRunFactory {
 	const runs: ScriptedRun[] = [];
@@ -175,6 +195,22 @@ export function createScriptedRunFactory(): ScriptedRunFactory {
 		const id = String(nextId);
 		nextId += 1;
 		let canceled = false;
+		const settled: Record<LaneId, boolean> = { left: false, right: false };
+		let doneEmitted = false;
+		/** Forward one event; once both lanes settle, follow with run/done. */
+		const emit = (event: RunEvent): void => {
+			onEvent(event);
+			if (
+				event.type === "lane/worker/done" ||
+				event.type === "lane/worker/error"
+			) {
+				settled[event.laneId] = true;
+			}
+			if (settled.left && settled.right && !doneEmitted) {
+				doneEmitted = true;
+				onEvent({ type: "run/done", runId: id });
+			}
+		};
 		const run: ScriptedRun = {
 			request,
 			handle: {
@@ -186,12 +222,24 @@ export function createScriptedRunFactory(): ScriptedRunFactory {
 			get canceled() {
 				return canceled;
 			},
-			emit(event) {
-				onEvent(event);
-			},
+			emit,
 		};
 		runs.push(run);
-		onEvent({ type: "run/started", runId: id });
+		emit({ type: "run/started", runId: id });
+		if (!isValidWorkspaceFolder(request.workspace)) {
+			// Reject the run before any worker starts: both lanes error, then
+			// the auto-settle logic above emits run/done.
+			emit({
+				type: "lane/worker/error",
+				laneId: "left",
+				reason: `invalid workspace: ${request.workspace}`,
+			});
+			emit({
+				type: "lane/worker/error",
+				laneId: "right",
+				reason: `invalid workspace: ${request.workspace}`,
+			});
+		}
 		return run.handle;
 	};
 	return {

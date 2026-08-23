@@ -122,6 +122,10 @@ function pageHtml(): string {
         <label for="primary-model">Primary model</label>
         <select id="primary-model"></select>
       </div>
+      <div class="field">
+        <label for="workspace">Workspace folder</label>
+        <input id="workspace" type="text" placeholder="Path the run agents may read…" />
+      </div>
       <button id="submit" type="button">Submit</button>
       <button id="cancel" type="button" disabled>Cancel</button>
     </div>
@@ -267,9 +271,6 @@ function pageHtml(): string {
         });
         endRun("canceled");
         break;
-      case "run/summary":
-        appendText(el("primary-output"), "\\n" + msg.summary);
-        break;
       case "orchestrator/delta":
         appendText(el("primary-output"), msg.text);
         break;
@@ -310,7 +311,8 @@ function pageHtml(): string {
           laneModels: {
             left: el("lane-left-model").value,
             right: el("lane-right-model").value
-          }
+          },
+          workspace: el("workspace").value
         }
       }));
     });
@@ -520,6 +522,7 @@ function isRunRequest(value: unknown): value is RunRequest {
 	return (
 		typeof value.task === "string" &&
 		typeof value.primaryModel === "string" &&
+		typeof value.workspace === "string" &&
 		isRecord(laneModels) &&
 		typeof laneModels.left === "string" &&
 		typeof laneModels.right === "string"
