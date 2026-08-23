@@ -32,7 +32,7 @@ import type { Context } from "@deepseek-ai/cordis";
 import type { Agent, AgentHandle } from "@deepseek-ai/dsh-agent";
 import { SessionId } from "@deepseek-ai/dsh-session";
 import type { SubagentResult, SubagentRun } from "@deepseek-ai/dsh-subagent";
-import { convertLlmModels, type LlmLike } from "./model-list.ts";
+import { convertLlmModels } from "./model-list.ts";
 import type { LaneId, RunEvent, StartRun } from "./run-factory.ts";
 import { resolveWorkspace } from "./workspace.ts";
 
@@ -76,7 +76,7 @@ function workerFailureReason(result: SubagentResult): string {
  */
 async function resolveProviders(ctx: Context): Promise<Map<string, string>> {
 	const providers = new Map<string, string>();
-	const models = await convertLlmModels(ctx.llm as unknown as LlmLike);
+	const models = await convertLlmModels(ctx.llm);
 	for (const model of models) {
 		if (!providers.has(model.id)) providers.set(model.id, model.provider);
 	}
