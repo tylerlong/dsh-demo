@@ -2,13 +2,15 @@
  * App.tsx — the harness-workflow app shell.
  *
  * The single-page application's outer structure: a header naming the product
- * above a main content region. The run configuration form, the model and
- * workspace selectors, the lane components, and the run lifecycle mount into
- * <main> in later tickets (#32 run configuration form, #33 run lifecycle).
+ * above a main content region. The run configuration form (ticket #32) mounts
+ * into <main>; the lane components and the run lifecycle mount alongside it
+ * in ticket #33.
  *
  * Styling is Tailwind utilities only (the old flat stylesheet is deleted);
  * the existing look is converted to utility classes as the components land.
  */
+import { RunConfigForm } from "./RunConfigForm.tsx";
+
 export function App() {
 	return (
 		<div className="min-h-screen bg-slate-100 text-slate-900">
@@ -20,7 +22,8 @@ export function App() {
 				</div>
 			</header>
 			<main className="mx-auto max-w-5xl px-6 py-6">
-				{/* The run configuration form and the two lanes mount here (#32, #33). */}
+				<RunConfigForm />
+				{/* The two lanes and the run lifecycle mount here (#33). */}
 			</main>
 		</div>
 	);

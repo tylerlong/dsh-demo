@@ -41,6 +41,14 @@
 		"web/vite.config.ts",
 		"web/src/main.tsx",
 		"web/src/App.tsx",
+		"web/src/api.ts",
+		"web/src/ModelSelect.tsx",
+		"web/src/WorkspaceSelect.tsx",
+		"web/src/RunConfigForm.tsx",
+		"web/src/test-setup.ts",
+		"web/src/ModelSelect.test.tsx",
+		"web/src/WorkspaceSelect.test.tsx",
+		"web/src/RunConfigForm.test.tsx",
 		"web/src/vite-env.d.ts"
 	]
 }
