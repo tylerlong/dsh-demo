@@ -1,21 +1,25 @@
 /**
  * session-tree.test.ts — seam tests for the read-only session-tree and
- * transcript reads (ticket #38).
+ * transcript reads (ticket #38; child ticket #46 makes the transcript read
+ * primary-only with per-line roles and live lanes).
  *
  * The session browser's left panel is a two-level tree (workspace → its
  * sessions) sourced read-only from the shared workspace registry and session
- * store; the right panel renders each agent's output (the primary session and
- * its lane-worker children) from the store's recent ~100-line window. These
- * tests exercise the two seams (convertSessionTree / convertSessionTranscript)
- * with injected fakes — no real harness — asserting the tree shape, the
- * strict read-only contract (only list() / inspect() are ever called, never a
- * mutation), and the recent-window behavior.
+ * store; the right panel renders the selected session's own output from the
+ * store's recent ~100-line window — primary-only (child #46): stored subagent
+ * children are never read, each line carries a role, and live lane windows of
+ * our own in-progress run are supplied separately. These tests exercise the
+ * two seams (convertSessionTree / convertSessionTranscript) with injected
+ * fakes — no real harness — asserting the tree shape, the strict read-only
+ * contract (only list() / inspect() are ever called, never a mutation), and
+ * the recent-window behavior.
  */
 import { describe, expect, it } from "vitest";
 import {
 	convertSessionTranscript,
 	TRANSCRIPT_WINDOW_LINES,
 	type TranscriptEvent,
+	type TranscriptWindow,
 } from "../src/session-transcript.ts";
 import { convertSessionTree } from "../src/session-tree.ts";
 
@@ -110,9 +114,8 @@ function nonMessageEvent(type: string): TranscriptEvent {
 	return { type, data: {} };
 }
 
-/** A transcript store fake: headers + per-session event logs, call-recorded. */
+/** A transcript store fake: per-session event logs, call-recorded. */
 function fakeTranscriptStore(
-	headers: readonly { readonly id: string; readonly parentSession?: string }[],
 	eventsBySession: Readonly<Record<string, readonly TranscriptEvent[]>>,
 ): {
 	readonly calls: readonly string[];
@@ -122,10 +125,6 @@ function fakeTranscriptStore(
 	return {
 		calls,
 		store: {
-			list() {
-				calls.push("store.list");
-				return Promise.resolve(headers);
-			},
 			inspect(id: string) {
 				calls.push(`store.inspect:${id}`);
 				const events = eventsBySession[id] ?? [];
@@ -134,6 +133,7 @@ function fakeTranscriptStore(
 					events,
 				});
 			},
+			// Mutation surface DSH web owns; the seam must never reach it.
 			create() {
 				throw new Error("store mutation called");
 			},
@@ -246,38 +246,82 @@ describe("session tree seam", () => {
 });
 
 describe("session transcript seam", () => {
-	it("returns the primary session's window plus its lane-worker children found via parentSession", async () => {
-		const { store } = fakeTranscriptStore(
-			[
-				{ id: "session-primary" },
-				{ id: "session-left", parentSession: "session-primary" },
-				{ id: "session-right", parentSession: "session-primary" },
-				{ id: "session-other" },
+	it("is primary-only: reads only the selected session, never stored subagent children", async () => {
+		// The store holds the selected session plus two stored subagent children
+		// (the lane workers a past run left behind). The read must not load them.
+		const { store, calls } = fakeTranscriptStore({
+			"session-primary": [
+				messageEvent("user/message", "task: compare two models"),
+				messageEvent("assistant/message", "spawning workers"),
 			],
-			{
-				"session-primary": [
-					messageEvent("user/message", "task: compare two models"),
-					messageEvent("assistant/message", "spawning workers"),
-				],
-				"session-left": [messageEvent("assistant/message", "left answer")],
-				"session-right": [messageEvent("assistant/message", "right answer")],
-			},
-		);
+			"session-left": [messageEvent("assistant/message", "left answer")],
+			"session-right": [messageEvent("assistant/message", "right answer")],
+		});
 
 		const transcript = await convertSessionTranscript(store, "session-primary");
 
 		expect(transcript.primary).toEqual({
 			sessionId: "session-primary",
-			lines: ["task: compare two models", "spawning workers"],
+			lines: [
+				{ text: "task: compare two models", role: "input" },
+				{ text: "spawning workers", role: "output" },
+			],
 		});
-		expect(transcript.lanes).toEqual([
-			{ sessionId: "session-left", lines: ["left answer"] },
-			{ sessionId: "session-right", lines: ["right answer"] },
+		// No live lanes: nothing from the store's subagent children.
+		expect(transcript.lanes).toEqual([]);
+		expect(calls).toEqual(["store.inspect:session-primary"]);
+	});
+
+	it("tags each line with its role: user= input, assistant= output, tool= default", async () => {
+		const { store } = fakeTranscriptStore({
+			"session-primary": [
+				messageEvent("user/message", "the request"),
+				messageEvent("assistant/message", "the reply"),
+				messageEvent("tool/result", "the tool output"),
+			],
+		});
+
+		const transcript = await convertSessionTranscript(store, "session-primary");
+
+		expect(transcript.primary.lines).toEqual([
+			{ text: "the request", role: "input" },
+			{ text: "the reply", role: "output" },
+			{ text: "the tool output", role: "default" },
 		]);
 	});
 
+	it("carries the live lane windows of our own in-progress run when supplied", async () => {
+		const { store, calls } = fakeTranscriptStore({
+			"session-primary": [messageEvent("assistant/message", "primary text")],
+			"session-left": [messageEvent("assistant/message", "left live")],
+			"session-right": [messageEvent("assistant/message", "right live")],
+		});
+
+		// The two lane workers our live run just created, supplied in-memory
+		// (this run's children) — never read from stored history.
+		const liveLanes: TranscriptWindow[] = [
+			{
+				sessionId: "session-left",
+				lines: [{ text: "left live", role: "output" }],
+			},
+			{
+				sessionId: "session-right",
+				lines: [{ text: "right live", role: "output" }],
+			},
+		];
+		const transcript = await convertSessionTranscript(
+			store,
+			"session-primary",
+			liveLanes,
+		);
+
+		expect(transcript.lanes).toEqual(liveLanes);
+		// Only the primary is inspected; the live lanes are never store reads.
+		expect(calls).toEqual(["store.inspect:session-primary"]);
+	});
+
 	it("returns an empty window for a session with no message-producing events", async () => {
-		const { store } = fakeTranscriptStore([{ id: "session-primary" }], {
+		const { store } = fakeTranscriptStore({
 			"session-primary": [
 				nonMessageEvent("turn/start"),
 				nonMessageEvent("assistant/chunk"),
@@ -296,7 +340,7 @@ describe("session transcript seam", () => {
 			{ length: TRANSCRIPT_WINDOW_LINES + 50 },
 			(_, i) => `line-${i}`,
 		);
-		const { store } = fakeTranscriptStore([{ id: "session-primary" }], {
+		const { store } = fakeTranscriptStore({
 			"session-primary": [
 				messageEvent("assistant/message", longLines.join("\n")),
 			],
@@ -306,30 +350,24 @@ describe("session transcript seam", () => {
 
 		expect(transcript.primary.lines).toHaveLength(TRANSCRIPT_WINDOW_LINES);
 		// The window is the tail: the last 100 lines, in order.
-		expect(transcript.primary.lines[0]).toBe("line-50");
-		expect(transcript.primary.lines.at(-1)).toBe(
-			`line-${TRANSCRIPT_WINDOW_LINES + 49}`,
-		);
+		expect(transcript.primary.lines[0]).toEqual({
+			text: "line-50",
+			role: "output",
+		});
+		expect(transcript.primary.lines.at(-1)).toEqual({
+			text: `line-${TRANSCRIPT_WINDOW_LINES + 49}`,
+			role: "output",
+		});
 	});
 
-	it("is strictly read-only: only store.list() and store.inspect() are called", async () => {
-		const { store, calls } = fakeTranscriptStore(
-			[
-				{ id: "session-primary" },
-				{ id: "session-left", parentSession: "session-primary" },
-			],
-			{
-				"session-primary": [messageEvent("assistant/message", "primary text")],
-				"session-left": [messageEvent("assistant/message", "left text")],
-			},
-		);
+	it("is strictly read-only: only store.inspect() is called, no list()", async () => {
+		const { store, calls } = fakeTranscriptStore({
+			"session-primary": [messageEvent("assistant/message", "primary text")],
+			"session-left": [messageEvent("assistant/message", "left text")],
+		});
 
 		await convertSessionTranscript(store, "session-primary");
 
-		expect(calls).toEqual([
-			"store.list",
-			"store.inspect:session-left",
-			"store.inspect:session-primary",
-		]);
+		expect(calls).toEqual(["store.inspect:session-primary"]);
 	});
 });

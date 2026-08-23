@@ -87,9 +87,10 @@ export function loadSessionsFromContext(
 /**
  * The /api/sessions/:id/transcript loader supplied from the booted context:
  * the shared session store, pinned to the transcript-read seam shape. Strictly
- * read-only — only `store.list()` and `store.inspect()`, never a mutation. A
- * read failure resolves to an empty transcript ([]-equivalent) and logs,
- * matching serve.ts today.
+ * read-only — only `store.inspect()` (child #46: no parentSession listing), never
+ * a mutation. A read failure resolves to an empty transcript ([]-equivalent)
+ * and logs, matching serve.ts today. Live lane windows are supplied by the
+ * caller when our own run is active.
  */
 export function loadTranscriptFromContext(
 	ctx: Context,

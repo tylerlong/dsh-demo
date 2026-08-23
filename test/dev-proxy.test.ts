@@ -101,7 +101,10 @@ beforeAll(async () => {
 		loadModels: () => MODELS,
 		loadSessions: () => SESSIONS,
 		loadTranscript: () => ({
-			primary: { sessionId: "session-1", lines: ["primary text"] },
+			primary: {
+				sessionId: "session-1",
+				lines: [{ text: "primary text", role: "input" }],
+			},
 			lanes: [],
 		}),
 		startRun: factory.startRun,

@@ -1,17 +1,32 @@
 /**
- * session-transcript.ts — the read-only store transcript seam (ticket #38).
+ * session-transcript.ts — the read-only store transcript seam (ticket #38,
+ * child ticket #46).
  *
- * The right panel renders each agent's output (the primary agent and its two
- * lane-worker children) by reading the shared session store, showing a recent
- * ~100-line window rather than the full history — reusing DSH web's display
- * approach (fold the message-producing surface events into text) instead of
- * assembling output from streamed deltas. This module is the thin adapter
- * from the shared session store (`ctx.sessionPersistence`) to that transcript
- * window shape the server serves over GET /api/sessions/:id/transcript.
+ * The right panel renders one agent's output by reading the shared session
+ * store, showing a recent ~100-line window rather than the full history —
+ * reusing DSH web's display approach (fold the message-producing surface
+ * events into text) instead of assembling output from streamed deltas. This
+ * module is the thin adapter from the shared session store
+ * (ctx.sessionPersistence) to that transcript window shape the server serves
+ * over GET /api/sessions/:id/transcript.
  *
- * The read is strictly read-only: it only calls `store.list()` (to find the
- * selected session's lane-worker children via their `parentSession` header)
- * and `store.inspect(id)` (to read each session's immutable log) — never a
+ * Child ticket #46 makes the read primary-only with per-line roles and live
+ * lanes:
+ *
+ *  - primary-only — the read returns only the selected session's own
+ *    recent window. It never reads stored subagent children (there is no
+ *    store.list() parentSession lookup here anymore), so a session with
+ *    hundreds of old subtree agents never renders their histories.
+ *  - per-line roles — every rendered line carries a role
+ *    (input / output / default) derived from the producing event, so
+ *    the page can style what was fed to the model (user-role) vs what it
+ *    produced (assistant-role).
+ *  - live lanes — the two lane-worker outputs of our own in-progress run
+ *    are supplied separately (in-memory, this run's children) and carried
+ *    through SessionTranscript.lanes; the seam never reads them from the
+ *    store. With no live run, lanes is empty.
+ *
+ * The read is strictly read-only: it only calls store.inspect(id), never a
  * mutation (no create / append / prepare / resume). Mirroring the
  * WorkspaceRegistryLike / SessionStoreLike pattern, the narrow structural
  * store slice keeps the server testable without the real harness.
@@ -20,19 +35,38 @@
 /** The number of lines in the recent transcript window. */
 export const TRANSCRIPT_WINDOW_LINES = 100;
 
+/**
+ * A line's role, so the page can style what was fed to the model vs what it
+ * produced. input — a user/request line; output — an assistant/response
+ * line; default — every tool/step/system line.
+ */
+export type TranscriptRole = "input" | "output" | "default";
+
+/** One rendered line of the transcript window. */
+export interface TranscriptLine {
+	/** The line's visible text (message blocks folded to text only). */
+	readonly text: string;
+	/** Whether this line is model input, model output, or the default style. */
+	readonly role: TranscriptRole;
+}
+
 /** One agent's recent transcript window read from the store. */
 export interface TranscriptWindow {
 	/** The session id this window was read from. */
 	readonly sessionId: string;
-	/** The recent ~100-line window of the agent's transcript text. */
-	readonly lines: readonly string[];
+	/** The recent ~100-line window of the agent's transcript. */
+	readonly lines: readonly TranscriptLine[];
 }
 
 /** The read-only transcript read for one selected session. */
 export interface SessionTranscript {
 	/** The selected (primary) session's window. */
 	readonly primary: TranscriptWindow;
-	/** The lane-worker children's windows (found via `parentSession`). */
+	/**
+	 * The live lane-worker windows of our own in-progress run, supplied
+	 * in-memory. Stored subagent children are never read from the store, so
+	 * without a live run this is empty.
+	 */
 	readonly lanes: readonly TranscriptWindow[];
 }
 
@@ -44,10 +78,6 @@ export interface TranscriptEvent {
 
 /** The narrow slice of the shared session store the transcript read needs. */
 export interface TranscriptStoreLike {
-	/** Lightweight listing from metadata; headers carry parentSession lineage. */
-	list(): Promise<
-		readonly { readonly id: string; readonly parentSession?: string }[]
-	>;
 	/** Immutable logical session read; never mutates the store. */
 	inspect(id: string): Promise<{
 		readonly meta: { readonly id: string; readonly parentSession?: string };
@@ -95,8 +125,26 @@ function eventText(event: TranscriptEvent): string | undefined {
 	}
 }
 
+/**
+ * The role one message-producing event's line carries. What was fed to the
+ * model (user/message) is input; what the model produced (assistant/
+ * message) is output; everything else (tool results, etc.) is default.
+ */
+function eventRole(event: TranscriptEvent): TranscriptRole {
+	switch (event.type) {
+		case "user/message":
+			return "input";
+		case "assistant/message":
+			return "output";
+		default:
+			return "default";
+	}
+}
+
 /** Keep only the recent ~100-line window (the tail of the transcript). */
-function recentWindow(lines: readonly string[]): readonly string[] {
+function recentWindow(
+	lines: readonly TranscriptLine[],
+): readonly TranscriptLine[] {
 	return lines.length <= TRANSCRIPT_WINDOW_LINES
 		? lines
 		: lines.slice(lines.length - TRANSCRIPT_WINDOW_LINES);
@@ -108,37 +156,35 @@ async function windowOf(
 	sessionId: string,
 ): Promise<TranscriptWindow> {
 	const inspection = await store.inspect(sessionId);
-	const lines: string[] = [];
+	const lines: TranscriptLine[] = [];
 	for (const event of inspection.events) {
 		const text = eventText(event);
 		if (text === undefined) continue;
+		const role = eventRole(event);
 		for (const line of text.split("\n")) {
-			lines.push(line);
+			lines.push({ text: line, role });
 		}
 	}
 	return { sessionId, lines: recentWindow(lines) };
 }
 
 /**
- * Read the selected session's recent transcript: the primary session's window
- * plus each lane-worker child's window (children found via their
- * `parentSession` header). Strictly read-only — only `store.list()` and
- * `store.inspect()`, never a mutation.
+ * Read the selected session's recent transcript — primary-only. Only the
+ * selected session's own window is read from the store; stored subagent
+ * children are never read (no parentSession lookup). The two lane-worker
+ * outputs of a live run are supplied separately as liveLanes (in-memory,
+ * this run's children) and carried through SessionTranscript.lanes, so a
+ * live run renders alongside the primary without the transcript read ever
+ * touching stored subagent history. Strictly read-only — only
+ * store.inspect(), never a mutation.
  */
 export async function convertSessionTranscript(
 	store: TranscriptStoreLike,
 	sessionId: string,
+	liveLanes: readonly TranscriptWindow[] = [],
 ): Promise<SessionTranscript> {
-	const headers = await store.list();
-	const children = headers
-		.filter((header) => header.parentSession === sessionId)
-		.map((header) => header.id);
-	const lanes: TranscriptWindow[] = [];
-	for (const childId of children) {
-		lanes.push(await windowOf(store, childId));
-	}
 	return {
 		primary: await windowOf(store, sessionId),
-		lanes,
+		lanes: liveLanes,
 	};
 }

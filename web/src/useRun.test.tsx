@@ -58,7 +58,10 @@ const SESSION_TREE: SessionTree = [
 ];
 
 const TRANSCRIPT: SessionTranscript = {
-	primary: { sessionId: "session-2", lines: ["primary output"] },
+	primary: {
+		sessionId: "session-2",
+		lines: [{ text: "primary output", role: "output" }],
+	},
 	lanes: [],
 };
 

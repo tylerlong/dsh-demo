@@ -66,16 +66,28 @@ const SESSION_TREE: SessionTree = [
 
 /** The store transcript for session-2: primary + two lane-worker children. */
 const TRANSCRIPT_2: SessionTranscript = {
-	primary: { sessionId: "session-2", lines: ["primary output"] },
+	primary: {
+		sessionId: "session-2",
+		lines: [{ text: "primary output", role: "output" }],
+	},
 	lanes: [
-		{ sessionId: "session-2-child-left", lines: ["left lane output"] },
-		{ sessionId: "session-2-child-right", lines: ["right lane output"] },
+		{
+			sessionId: "session-2-child-left",
+			lines: [{ text: "left lane output", role: "output" }],
+		},
+		{
+			sessionId: "session-2-child-right",
+			lines: [{ text: "right lane output", role: "output" }],
+		},
 	],
 };
 
 /** The store transcript for session-3 (a different session). */
 const TRANSCRIPT_3: SessionTranscript = {
-	primary: { sessionId: "session-3", lines: ["other session"] },
+	primary: {
+		sessionId: "session-3",
+		lines: [{ text: "other session", role: "output" }],
+	},
 	lanes: [],
 };
 

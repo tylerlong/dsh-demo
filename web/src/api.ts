@@ -7,8 +7,9 @@
  * session's transcript from the server's session endpoints: GET /api/sessions
  * returns the two-level tree (workspaces with their sessions, each labeled by
  * its id), and GET /api/sessions/:id/transcript returns the selected session's
- * recent ~100-line window (primary + lane-worker children). These thin fetch
- * wrappers mirror the shapes the server serves (see src/session-tree.ts and
+ * recent ~100-line window — primary-only, with per-line roles and (when a run
+ * is live) the live lane windows (child #46). These thin fetch wrappers mirror
+ * the shapes the server serves (see src/session-tree.ts and
  * src/session-transcript.ts), so the client and the server agree on the
  * session-browser contract. The workspace dropdown is gone (parent #37): the
  * run continues the session picked in the tree, so there is no workspace
@@ -64,19 +65,34 @@ export interface WorkspaceNode {
 /** The read-only workspace → sessions tree served by GET /api/sessions. */
 export type SessionTree = readonly WorkspaceNode[];
 
+/** A transcript line's role: input (user), output (assistant), default. */
+export type TranscriptRole = "input" | "output" | "default";
+
+/** One rendered line of a transcript window (mirror of TranscriptLine). */
+export interface TranscriptLine {
+	/** The line's visible text (message blocks folded to text only). */
+	readonly text: string;
+	/** Whether this line is model input, model output, or the default style. */
+	readonly role: TranscriptRole;
+}
+
 /** One agent's recent transcript window (mirror of TranscriptWindow). */
 export interface TranscriptWindow {
 	/** The session id this window was read from. */
 	readonly sessionId: string;
-	/** The recent ~100-line window of the agent's transcript text. */
-	readonly lines: readonly string[];
+	/** The recent ~100-line window of the agent's transcript. */
+	readonly lines: readonly TranscriptLine[];
 }
 
 /** The read-only transcript read for one selected session. */
 export interface SessionTranscript {
 	/** The selected (primary) session's window. */
 	readonly primary: TranscriptWindow;
-	/** The lane-worker children's windows (found via parentSession). */
+	/**
+	 * The live lane-worker windows of our own in-progress run, supplied
+	 * in-memory. Stored subagent children are never read, so without a live
+	 * run this is empty.
+	 */
 	readonly lanes: readonly TranscriptWindow[];
 }
 

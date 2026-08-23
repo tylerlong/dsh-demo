@@ -1,12 +1,14 @@
 /**
- * Transcript.tsx — the selected session's transcript panel (parent ticket #37).
+ * Transcript.tsx — the selected session's transcript panel (parent ticket #37;
+ * child ticket #46 makes the read primary-only with per-line roles).
  *
  * The session browser's right panel: the selected session's recent ~100-line
- * output window read from the shared store — the primary agent's window plus
- * each lane-worker child's window (children found via the parentSession
- * header). Output is never assembled from streamed deltas: the panel renders
- * whatever the store read returned, and a session/updated push (or a
- * selection change) triggers a fresh store read. Sessions are labeled by
+ * window read from the shared store — primary-only (child #46): stored subagent
+ * children are never read; each line carries a role (input / output / default)
+ * the page styles, and the two lane windows of a live in-progress run are
+ * supplied on the read. Output is never assembled from streamed deltas: the
+ * panel renders whatever the store read returned, and a session/updated push
+ * (or a selection change) triggers a fresh store read. Sessions are labeled by
  * their id only (SessionHeader has no title field).
  */
 import type { ReactNode } from "react";
@@ -64,7 +66,7 @@ export function Transcript({
 							}
 							className="min-h-[48px] whitespace-pre-wrap break-words rounded-md border border-slate-200 bg-slate-50 p-2 font-mono text-xs"
 						>
-							{agent.window.lines.join("\n")}
+							{agent.window.lines.map((line) => line.text).join("\n")}
 						</pre>
 					</div>
 				))}

@@ -69,9 +69,9 @@ export interface ServerOptions {
 		| Promise<readonly WorkspaceNode[]>
 		| readonly WorkspaceNode[];
 	/**
-	 * Inject the read-only transcript read (ticket #38): one selected session's
-	 * recent ~100-line window (primary + lane-worker children via
-	 * parentSession), read from the shared session store (see
+	 * Inject the read-only transcript read (ticket #38, child #46): one
+	 * selected session's recent ~100-line window — primary-only, with per-line
+	 * roles, plus (when our own run is live) the in-memory lane windows (see
 	 * session-transcript.ts). Production passes a loader backed by the booted
 	 * context; tests inject a fixed read. Backs GET /api/sessions/:id/transcript.
 	 */
@@ -455,7 +455,8 @@ async function handleRequest(
 	);
 	if (method === "GET" && transcriptMatch !== null) {
 		// The read-only transcript read for one selected session: the primary
-		// session and its lane-worker children, as a recent ~100-line window.
+		// session's own recent ~100-line window (child #46), each line tagged
+		// with its role, with live lane windows supplied when a run is active.
 		const sessionId = decodeURIComponent(transcriptMatch[1] ?? "");
 		const transcript = await options.loadTranscript(sessionId);
 		res.writeHead(200, { "content-type": "application/json; charset=utf-8" });

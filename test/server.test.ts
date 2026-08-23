@@ -80,11 +80,20 @@ const SESSIONS: WorkspaceNode[] = [
 const TRANSCRIPT: SessionTranscript = {
 	primary: {
 		sessionId: "session-1",
-		lines: ["task: compare two models", "spawning workers"],
+		lines: [
+			{ text: "task: compare two models", role: "input" },
+			{ text: "spawning workers", role: "output" },
+		],
 	},
 	lanes: [
-		{ sessionId: "session-left", lines: ["left answer"] },
-		{ sessionId: "session-right", lines: ["right answer"] },
+		{
+			sessionId: "session-left",
+			lines: [{ text: "left answer", role: "output" }],
+		},
+		{
+			sessionId: "session-right",
+			lines: [{ text: "right answer", role: "output" }],
+		},
 	],
 };
 
