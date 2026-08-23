@@ -31,6 +31,8 @@
 		"test/real-run-factory.test.ts",
 		"test/server.test.ts",
 		"test/model-list.test.ts",
+		"test/e2e/app.spec.ts",
+		"playwright.config.ts",
 		"vitest.config.ts"
 	]
 }

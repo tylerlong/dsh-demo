@@ -1,6 +1,11 @@
 node_modules
 *.txt
 
+# Playwright test artifacts
+test-results/
+playwright-report/
+
+
 # Optional local overrides (only created if you point dsh-demo.config.json at them).
 .dsh-sessions/
 .credentials.yaml

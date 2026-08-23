@@ -187,7 +187,7 @@ function pageHtml(): string {
 
   // ---- per-lane status chips and elapsed timers ----
   function setLaneChip(lane, text, cls) {
-    var chip = el(lane + "-status");
+    var chip = el("lane-" + lane + "-status");
     chip.textContent = text;
     chip.className = "status chip";
     if (cls) chip.className += " " + cls;
@@ -196,7 +196,7 @@ function pageHtml(): string {
     stopLaneTimer(lane);
     laneSeconds[lane] = 0;
     laneRunning[lane] = false;
-    el(lane + "-output").textContent = "";
+    el("lane-" + lane + "-output").textContent = "";
     setLaneChip(lane, "", "");
   }
   function startLaneTimer(lane) {
@@ -268,7 +268,7 @@ function pageHtml(): string {
         endRun("canceled");
         break;
       case "run/summary":
-        appendText(el("primary-output"), "\n" + msg.summary);
+        appendText(el("primary-output"), "\\n" + msg.summary);
         break;
       case "orchestrator/delta":
         appendText(el("primary-output"), msg.text);
@@ -277,7 +277,7 @@ function pageHtml(): string {
         startLaneTimer(msg.laneId);
         break;
       case "lane/worker/delta":
-        appendText(el(msg.laneId + "-output"), msg.text);
+        appendText(el("lane-" + msg.laneId + "-output"), msg.text);
         break;
       case "lane/worker/done":
         finishLane(msg.laneId, "done", "done");
