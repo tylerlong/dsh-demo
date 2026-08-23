@@ -18,5 +18,12 @@
 		"resolveJsonModule": true,
 		"types": ["node"]
 	},
-	"include": ["src/boot.ts", "src/index.ts", "src/enhanced-flow.ts"]
+	"include": [
+		"src/boot.ts",
+		"src/index.ts",
+		"src/enhanced-flow.ts",
+		"src/run-factory.ts",
+		"test/run-factory.test.ts",
+		"vitest.config.ts"
+	]
 }
