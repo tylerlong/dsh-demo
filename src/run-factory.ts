@@ -72,7 +72,10 @@ export interface LaneWorkerDoneEvent {
 export interface LaneWorkerErrorEvent {
 	type: "lane/worker/error";
 	laneId: LaneId;
-	/** Error reason; shown on the lane chip, logged to the server console. */
+	/**
+	 * Error reason; logged to the server console only, never sent to the UI
+	 * (the lane just shows an error status chip).
+	 */
 	reason: string;
 }
 

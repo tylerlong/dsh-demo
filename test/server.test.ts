@@ -336,9 +336,10 @@ describe("ws run lifecycle", () => {
 			const errored = (await waitFor(
 				received,
 				(e) => e.type === "lane/worker/error",
-			)) as Extract<RunEvent, { type: "lane/worker/error" }>;
+			)) as { laneId?: string; reason?: string };
+			// The lane is told which side failed, but the reason stays server-side.
 			expect(errored.laneId).toBe("left");
-			expect(errored.reason).toBe("rate limited");
+			expect(errored.reason).toBeUndefined();
 			expect(consoleError).toHaveBeenCalledWith(
 				expect.stringContaining("rate limited"),
 			);
@@ -393,5 +394,8 @@ describe("client run-lifecycle wiring", () => {
 		expect(html).toContain("setInputsLocked");
 		expect(html).toContain("el(id).disabled = locked");
 		expect(html).toContain('id="cancel"');
+		// Cancel winds running lanes down to a canceled chip; done marks them done.
+		expect(html).toContain('finishLane(lane, "canceled", "canceled")');
+		expect(html).toContain('finishLane(lane, "done", "done")');
 	});
 });

@@ -20,6 +20,7 @@ import WebSocket, { type RawData, WebSocketServer } from "ws";
 import type { ModelOption } from "./model-list.ts";
 import { resolveDefaults } from "./model-list.ts";
 import type {
+	LaneId,
 	RunEvent,
 	RunHandle,
 	RunRequest,
@@ -100,6 +101,7 @@ function pageHtml(): string {
   .chip.running { background: #dbeafe; color: #1d4ed8; }
   .chip.done { background: #dcfce7; color: #15803d; }
   .chip.error { background: #fee2e2; color: #b91c1c; }
+  .chip.canceled { background: #e5e7eb; color: #374151; }
   #lanes { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
   .lane h2 { font-size: 1.05rem; margin: 0 0 8px; }
   @media (max-width: 760px) { #lanes { grid-template-columns: 1fr; } }
@@ -155,6 +157,7 @@ function pageHtml(): string {
   var state = { running: false, runElapsed: 0 };
   var laneTimers = { left: null, right: null };
   var laneSeconds = { left: 0, right: 0 };
+  var laneRunning = { left: false, right: false };
   var runTimer = null;
   var ws = null;
 
@@ -192,11 +195,13 @@ function pageHtml(): string {
   function clearLane(lane) {
     stopLaneTimer(lane);
     laneSeconds[lane] = 0;
+    laneRunning[lane] = false;
     el(lane + "-output").textContent = "";
     setLaneChip(lane, "", "");
   }
   function startLaneTimer(lane) {
-    clearLane(lane);
+    laneRunning[lane] = true;
+    laneSeconds[lane] = 0;
     setLaneChip(lane, "running · 0s", "running");
     laneTimers[lane] = setInterval(function () {
       laneSeconds[lane] += 1;
@@ -208,6 +213,7 @@ function pageHtml(): string {
   }
   function finishLane(lane, status, cls) {
     var seconds = laneSeconds[lane] || 0;
+    laneRunning[lane] = false;
     stopLaneTimer(lane);
     setLaneChip(lane, status + " · " + seconds + "s", cls);
   }
@@ -250,13 +256,15 @@ function pageHtml(): string {
       case "run/done":
         // A clear completion signal: any lane still running is done.
         LANES.forEach(function (lane) {
-          if (el(lane + "-status").textContent.indexOf("running") === 0) {
-            finishLane(lane, "done", "done");
-          }
+          if (laneRunning[lane]) finishLane(lane, "done", "done");
         });
         endRun("done");
         break;
       case "run/canceled":
+        // The whole run aborted: running lanes wind down to canceled.
+        LANES.forEach(function (lane) {
+          if (laneRunning[lane]) finishLane(lane, "canceled", "canceled");
+        });
         endRun("canceled");
         break;
       case "run/summary":
@@ -410,6 +418,9 @@ function handleConnection(ws: WebSocket, options: ServerOptions): void {
 			console.error(
 				`dsh-compare: lane ${event.laneId} worker error: ${event.reason}`,
 			);
+			// Strip the reason from the wire: the lane just shows its error chip.
+			sendEvent(ws, { type: "lane/worker/error", laneId: event.laneId });
+			return;
 		}
 		if (event.type === "run/done" || event.type === "run/canceled") {
 			// The run reached a terminal state; a new submit may start one.
@@ -455,8 +466,14 @@ function handleConnection(ws: WebSocket, options: ServerOptions): void {
 	});
 }
 
-/** Serialize and send one run event to the client, if the socket is open. */
-function sendEvent(ws: WebSocket, event: RunEvent): void {
+/**
+ * The client-facing wire event: the run event vocabulary minus the lane error
+ * reason, which stays on the server console only.
+ */
+type WireEvent = RunEvent | { type: "lane/worker/error"; laneId: LaneId };
+
+// Serialize and send one wire event to the client, if the socket is open.
+function sendEvent(ws: WebSocket, event: WireEvent): void {
 	if (ws.readyState === WebSocket.OPEN) {
 		ws.send(JSON.stringify(event));
 	}
