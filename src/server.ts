@@ -1,13 +1,13 @@
 /**
- * server.ts — the harness-workflow HTTP + WebSocket server and static UI shell.
+ * server.ts — the harness-workflow HTTP + WebSocket server and built frontend host.
  *
  * A Node http server bound to 127.0.0.1 on a configurable port (default 4173)
- * that serves the static page and upgrades to WebSocket. The page shell is a
- * top section (task textarea, primary model dropdown, Submit / Cancel,
- * primary output/status) above two lanes, each with its own model dropdown and
- * output panel. Dropdowns are populated at runtime from the harness's
- * configured model list (see model-list.ts) via GET /api/models, and seeds the
- * workspace dropdown from the shared workspace catalog via GET /api/workspaces.
+ * that serves the built React frontend (web/dist, produced by the serve
+ * command's vite build) as a generic static file server and upgrades to
+ * WebSocket. The frontend is a TypeScript + Vite + React single-page
+ * application (see web/); its model and workspace dropdowns populate at
+ * runtime from the harness's configured model list (see model-list.ts) via
+ * GET /api/models and from the shared workspace catalog via GET /api/workspaces.
  *
  * The server implements the full run lifecycle over each WebSocket
  * connection (submit / cancel / streaming, per-tab isolation) via the
@@ -18,7 +18,7 @@
  */
 import { readFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
-import { join } from "node:path";
+import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import WebSocket, { type RawData, WebSocketServer } from "ws";
 import type { LaneId, RunEvent, RunRequest } from "../shared/protocol.ts";
@@ -87,33 +87,80 @@ export interface ServerHandle {
 	close(): Promise<void>;
 }
 
-/** The static assets directory, sibling of this module (relative to the module,
- * not the process working directory) so the factory default resolves correctly
- * no matter where the server is launched from. Read from disk per request, so
- * editing the UI needs no restart. */
-const ASSETS_DIR = fileURLToPath(new URL("../public", import.meta.url));
+/** The built frontend directory, sibling of this module (relative to the
+ * module, not the process working directory) so the default resolves correctly
+ * no matter where the server is launched from. The serve command builds the
+ * frontend into this directory (vite build web, output web/dist); the server
+ * reads files from disk per request, so a rebuild needs no server restart. */
+const DIST_DIR = fileURLToPath(new URL("../web/dist", import.meta.url));
 
-/** Static assets the page loads: the document, its stylesheet, and its script. */
-const STATIC_ASSETS: Readonly<Record<string, { file: string; type: string }>> =
-	{
-		"/": { file: "index.html", type: "text/html; charset=utf-8" },
-		"/index.html": { file: "index.html", type: "text/html; charset=utf-8" },
-		"/style.css": { file: "style.css", type: "text/css; charset=utf-8" },
-		"/app.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
-	};
+/** Content types by file extension for the generic static file server. */
+const MIME_TYPES: Readonly<Record<string, string>> = {
+	".html": "text/html; charset=utf-8",
+	".js": "text/javascript; charset=utf-8",
+	".mjs": "text/javascript; charset=utf-8",
+	".css": "text/css; charset=utf-8",
+	".json": "application/json; charset=utf-8",
+	".svg": "image/svg+xml",
+	".png": "image/png",
+	".jpg": "image/jpeg",
+	".jpeg": "image/jpeg",
+	".gif": "image/gif",
+	".webp": "image/webp",
+	".ico": "image/x-icon",
+	".txt": "text/plain; charset=utf-8",
+	".map": "application/json",
+	".woff": "font/woff",
+	".woff2": "font/woff2",
+	".ttf": "font/ttf",
+};
 
-/** Read a static asset from disk, or undefined when it cannot be served. */
+/** Read a built frontend file from disk, or undefined when it cannot be served. */
 async function readAsset(file: string): Promise<Buffer | undefined> {
 	try {
-		return await readFile(join(ASSETS_DIR, file));
+		return await readFile(join(DIST_DIR, file));
 	} catch {
 		return undefined;
 	}
 }
 
 /**
- * Start the harness-workflow server: bind, serve the static page and /api/models,
- * and accept WebSocket connections. Resolves once the server is listening.
+ * Map a GET request URL to a file under the built output, or undefined for a
+ * route the static server does not own. The index document is served at the
+ * root; every other path maps to the file at that relative path. There is no
+ * SPA fallback: an unknown route is not rewritten to the index document and
+ * keeps returning 404. Paths that would escape the built directory (a dot-dot
+ * segment) are rejected rather than resolved.
+ */
+function staticFileFor(url: string): string | undefined {
+	let path = url.split("?")[0] ?? "";
+	path = path.split("#")[0] ?? "";
+	try {
+		path = decodeURIComponent(path);
+	} catch {
+		// Malformed percent-encoding cannot name a file.
+		return undefined;
+	}
+	if (path === "/") {
+		return "index.html";
+	}
+	if (!path.startsWith("/")) {
+		return undefined;
+	}
+	const relative = path.slice(1);
+	if (relative === "") {
+		return "index.html";
+	}
+	if (relative.split("/").includes("..")) {
+		return undefined;
+	}
+	return relative;
+}
+
+/**
+ * Start the harness-workflow server: bind, serve the built frontend and
+ * /api/models, and accept WebSocket connections. Resolves once the server is
+ * listening.
  */
 export async function startServer(
 	options: ServerOptions,
@@ -308,7 +355,7 @@ function isRunRequest(value: unknown): value is RunRequest {
 	);
 }
 
-/** Handle one http request: the page, the model list, the workspace list, or a 404. */
+/** Handle one http request: a built frontend file, the model list, the workspace list, or a 404. */
 async function handleRequest(
 	req: import("node:http").IncomingMessage,
 	res: import("node:http").ServerResponse,
@@ -316,20 +363,8 @@ async function handleRequest(
 ): Promise<void> {
 	const url = req.url ?? "/";
 	const method = req.method ?? "GET";
-	const asset = STATIC_ASSETS[url];
-	if (method === "GET" && asset !== undefined) {
-		// Read the asset from disk per request (resolved relative to the module),
-		// so editing the UI needs no server restart.
-		const body = await readAsset(asset.file);
-		if (body === undefined) {
-			res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
-			res.end("not found");
-			return;
-		}
-		res.writeHead(200, { "content-type": asset.type });
-		res.end(body);
-		return;
-	}
+	// The API routes win over the static server so /api/* never falls through
+	// to a (missing) built file.
 	if (method === "GET" && url === "/api/models") {
 		const models = await options.loadModels();
 		const defaults = resolveDefaults(models);
@@ -341,6 +376,22 @@ async function handleRequest(
 		const workspaces = await options.loadWorkspaces();
 		res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
 		res.end(JSON.stringify(workspaces));
+		return;
+	}
+	const file = staticFileFor(url);
+	if (method === "GET" && file !== undefined) {
+		// Read the built file from disk per request (resolved relative to the
+		// module), so a rebuild needs no server restart.
+		const body = await readAsset(file);
+		if (body === undefined) {
+			res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+			res.end("not found");
+			return;
+		}
+		res.writeHead(200, {
+			"content-type": MIME_TYPES[extname(file)] ?? "application/octet-stream",
+		});
+		res.end(body);
 		return;
 	}
 	res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });

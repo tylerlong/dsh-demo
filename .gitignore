@@ -5,6 +5,9 @@ node_modules
 test-results/
 playwright-report/
 
+# Vite build output (the server serves web/dist)
+web/dist/
+
 
 # Demo-only configuration, untracked from the product root.
 # The archived `examples/` demos resolve these from here; they are not product config.

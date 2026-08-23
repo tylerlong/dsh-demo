@@ -80,7 +80,7 @@ test("page loads, WS connects, dropdowns populate, no console errors", async ({
 	const workspaceOptions = page.locator("#workspace option");
 	await expect(workspaceOptions).toHaveCount(workspaces.length);
 	const optionPaths = await workspaceOptions.evaluateAll((els) =>
-		els.map((el) => (el as { value: string }).value),
+		els.map((el) => (el as HTMLOptionElement).value),
 	);
 	expect(optionPaths).toEqual(workspaces.map((w) => w.path));
 	expect(await page.locator("#submit").isEnabled()).toBe(true);

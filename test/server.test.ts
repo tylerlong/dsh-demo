@@ -1,16 +1,26 @@
 /**
  * server.test.ts — external-behavior tests for the harness-workflow server.
  *
- * The server is a plain Node http server that serves the static page, exposes
- * the harness-configured model list via /api/models, and upgrades to
- * WebSocket. These tests exercise those seams at their public boundary (HTTP
- * + WebSocket), injecting a fixed model list instead of booting the harness.
- * The run lifecycle (submit/cancel over the socket) is ticket #4.
+ * The server is a plain Node http server that serves the built frontend output
+ * (web/dist), exposes the harness-configured model list via /api/models, and
+ * upgrades to WebSocket. These tests exercise those seams at their public
+ * boundary (HTTP + WebSocket), injecting a fixed model list instead of booting
+ * the harness. The run lifecycle (submit/cancel over the socket) is ticket #4.
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { fileURLToPath } from "node:url";
+import { build } from "vite";
+import {
+	afterEach,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
 import WebSocket from "ws";
 import {
 	createScriptedRunFactory,
@@ -66,6 +76,18 @@ const WORKSPACES: WorkspaceOption[] = [
 	},
 ];
 
+/** The frontend source root, whose production build the static-page suite serves. */
+const WEB_ROOT = fileURLToPath(new URL("../web", import.meta.url));
+
+/**
+ * Build the frontend once for this file: the static-page suite fetches the
+ * built output (web/dist) the way the serve command serves it. The build
+ * happens in test setup, so no new prod-code seam is introduced for testing.
+ */
+beforeAll(async () => {
+	await build({ root: WEB_ROOT, logLevel: "silent" });
+}, 120_000);
+
 /** Every running server, closed together after each test. */
 const live: ServerHandle[] = [];
 
@@ -112,36 +134,33 @@ describe("server boot", () => {
 });
 
 describe("static page", () => {
-	it("serves the full layout: top section and two lanes", async () => {
+	it("serves the built index shell with the app entry and its asset references", async () => {
 		const handle = await start({ port: 0 });
 		const res = await fetch(`${handle.url}/`);
 		expect(res.status).toBe(200);
 		expect(res.headers.get("content-type")).toContain("text/html");
 		const html = await res.text();
 
-		// Top section: task textarea, primary model dropdown, Submit, Cancel, output/status.
-		expect(html).toContain("<textarea");
-		expect(html).toContain('id="task"');
-		expect(html).toContain('id="primary-model"');
-		expect(html).toContain('id="primary-output"');
-		expect(html).toMatch(/submit/i);
-		expect(html).toMatch(/cancel/i);
+		// The built React shell: the mount root and the module script entry.
+		expect(html).toContain('<div id="root">');
+		expect(html).toContain('<script type="module"');
 
-		// The workspace picker is a dropdown seeded from the shared catalog served
-		// by /api/workspaces (replacing the free-text input); an empty catalog
-		// shows a hint pointing at DSH web. Submit is served disabled.
-		expect(html).toContain('<select id="workspace"');
-		expect(html).toContain('id="workspace-hint"');
-		expect(html).toContain('id="cancel"');
-		expect(html).toContain(
-			'<button id="submit" type="button" disabled>Submit</button>',
-		);
+		// The entry script is served as a real asset with a JS content type.
+		// Layout and behavior are verified by the component tests and the e2e,
+		// so this suite stops at the index shell and asset references.
+		const asset = html.match(/src="([^"]+\.js)"/)?.[1];
+		expect(asset).toBeTruthy();
+		const assetRes = await fetch(`${handle.url}${asset}`);
+		expect(assetRes.status).toBe(200);
+		expect(assetRes.headers.get("content-type")).toContain("javascript");
+	});
 
-		// Two lanes, each with a model dropdown and an output panel.
-		expect(html).toContain('id="lane-left-model"');
-		expect(html).toContain('id="lane-left-output"');
-		expect(html).toContain('id="lane-right-model"');
-		expect(html).toContain('id="lane-right-output"');
+	it("404s unknown GET routes — no SPA fallback to the index document", async () => {
+		const handle = await start({ port: 0 });
+		const res = await fetch(`${handle.url}/no-such-page`);
+		expect(res.status).toBe(404);
+		const body = await res.text();
+		expect(body).not.toContain("<!doctype html>");
 	});
 });
 
@@ -490,44 +509,5 @@ describe("ws run lifecycle", () => {
 			wsA.close();
 			wsB.close();
 		}
-	});
-});
-describe("client run-lifecycle wiring", () => {
-	it("serves the extracted browser script that routes run events, locks inputs, submits/cancels", async () => {
-		const handle = await start({ port: 0 });
-		// The script lives at /app.js, served from disk like the document.
-		const res = await fetch(`${handle.url}/app.js`);
-		expect(res.status).toBe(200);
-		expect(res.headers.get("content-type")).toContain("javascript");
-		const script = await res.text();
-
-		// Submit builds the run request with the three model slots; cancel is wired.
-		expect(script).toContain('type: "submit"');
-		expect(script).toContain("laneModels");
-		expect(script).toContain('type: "cancel"');
-		// Streaming routes lane events to their panel and orchestrator to the top.
-		expect(script).toContain("ws.onmessage");
-		expect(script).toContain("run/started");
-		expect(script).toContain("run/done");
-		expect(script).toContain("run/canceled");
-		expect(script).toContain("lane/worker/error");
-		expect(script).toContain("lane/worker/delta");
-		expect(script).toContain("orchestrator/delta");
-		// All inputs are locked during a run except Cancel.
-		expect(script).toContain("setInputsLocked");
-		expect(script).toContain("el(id).disabled = locked");
-		// Cancel winds running lanes down to a canceled chip; done marks them done.
-		expect(script).toContain('finishLane(lane, "canceled", "canceled")');
-		expect(script).toContain('finishLane(lane, "done", "done")');
-		// Submit carries the chosen workspace path from the dropdown, rows show
-		// title + path, and no local remember/check wiring remains.
-		expect(script).toContain("currentWorkspace()");
-		expect(script).toContain("option.value = w.path");
-		expect(script).toContain('w.title + " (" + w.path + ")"');
-		expect(script).toContain("/api/workspaces");
-		expect(script).toContain("newestSessionAt");
-		expect(script).not.toContain("localforage");
-		expect(script).not.toContain("/api/workspace/check");
-		expect(script).not.toContain("rememberWorkspace");
 	});
 });
