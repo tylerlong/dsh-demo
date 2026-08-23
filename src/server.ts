@@ -6,7 +6,8 @@
  * top section (task textarea, primary model dropdown, Submit / Cancel,
  * primary output/status) above two lanes, each with its own model dropdown and
  * output panel. Dropdowns are populated at runtime from the harness's
- * configured model list (see model-list.ts) via GET /api/models.
+ * configured model list (see model-list.ts) via GET /api/models, and seeds the
+ * workspace dropdown from the shared workspace catalog via GET /api/workspaces.
  *
  * The server implements the full run lifecycle over each WebSocket
  * connection (submit / cancel / streaming, per-tab isolation) via the
@@ -15,11 +16,8 @@
  * Run directly with `pnpm serve` (boots the harness for the model list), or
  * embed the seam: tests inject `startServer` with a fixed loadModels.
  */
-import { readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
-import { createRequire } from "node:module";
 import WebSocket, { type RawData, WebSocketServer } from "ws";
-import type { WorkspaceOption } from "./workspace-list.ts";
 import type { ModelOption } from "./model-list.ts";
 import { resolveDefaults } from "./model-list.ts";
 import type {
@@ -29,6 +27,7 @@ import type {
 	RunRequest,
 	StartRun,
 } from "./run-factory.ts";
+import type { WorkspaceOption } from "./workspace-list.ts";
 
 /** Re-export the dropdown option shape the /api/models endpoint serves. */
 export type { ModelOption } from "./model-list.ts";
@@ -41,20 +40,6 @@ export const DEFAULT_HOST = "127.0.0.1";
 export const DEFAULT_PORT = 4173;
 /** WebSocket endpoint path. */
 export const WS_PATH = "/ws";
-
-/** The require hook (ESM) used to locate the published localforage UMD build. */
-const require = createRequire(import.meta.url);
-/** Lazily read the localforage UMD source served to the browser for memory. */
-let localforageSource: string | undefined;
-function localforageScript(): string {
-	if (localforageSource === undefined) {
-		localforageSource = readFileSync(
-			require.resolve("localforage/dist/localforage.js"),
-			"utf8",
-		);
-	}
-	return localforageSource;
-}
 
 /** Options for {@link startServer}. */
 export interface ServerOptions {
@@ -152,8 +137,9 @@ function pageHtml(): string {
         <select id="primary-model"></select>
       </div>
       <div class="field">
-        <label for="workspace">Workspace folder</label>
-        <input id="workspace" type="text" placeholder="Path the run agents may read…" />
+        <label for="workspace">Workspace</label>
+        <select id="workspace"></select>
+        <div class="status" id="workspace-hint"></div>
       </div>
       <button id="submit" type="button" disabled>Submit</button>
       <button id="cancel" type="button" disabled>Cancel</button>
@@ -183,7 +169,6 @@ function pageHtml(): string {
     </section>
   </div>
 </main>
-<script src="/vendor/localforage.js"></script>
 <script>
 (function () {
   "use strict";
@@ -217,6 +202,35 @@ function pageHtml(): string {
         if (model.id === def) select.value = model.id;
       });
     });
+  }
+
+  // Populate the workspace dropdown from the shared catalog, preselecting the
+  // workspace whose most recent session is newest.
+  async function populateWorkspaceList() {
+    var workspaces = await (await fetch("/api/workspaces")).json();
+    var select = el("workspace");
+    var preselect = -1;
+    var newestAt = -1;
+    workspaces.forEach(function (w, i) {
+      var option = document.createElement("option");
+      option.value = w.path;
+      option.textContent = w.title + " (" + w.path + ")";
+      select.appendChild(option);
+      if (typeof w.newestSessionAt === "number" && w.newestSessionAt > newestAt) {
+        newestAt = w.newestSessionAt;
+        preselect = i;
+      }
+    });
+    if (preselect >= 0) {
+      select.selectedIndex = preselect;
+    } else if (workspaces.length > 0) {
+      select.selectedIndex = 0;
+    }
+    if (workspaces.length === 0) {
+      el("workspace-hint").textContent =
+        "No workspaces in the catalog yet — create one in DSH web. There is no path fallback.";
+    }
+    syncSubmitState();
   }
 
   // ---- per-lane status chips and elapsed timers ----
@@ -254,45 +268,23 @@ function pageHtml(): string {
 
   // ---- run-level state: lock the inputs, drive a run-level timer ----
   function showRunStatus(text) { el("primary-status").textContent = text; }
+  // The chosen workspace's canonical path, or "" when the catalog is empty.
   function currentWorkspace() {
-    return el("workspace").value.trim();
+    var select = el("workspace");
+    var option =
+      select.selectedIndex >= 0 ? select.options[select.selectedIndex] : undefined;
+    return option === undefined ? "" : option.value;
   }
-  // Submit is usable only when a run is not active and a workspace is present.
+  // Submit is usable only when a run is not active and a workspace is chosen.
   function syncSubmitState() {
     el("submit").disabled = state.running || currentWorkspace() === "";
   }
   function setInputsLocked(locked) {
-    ["task", "primary-model", "lane-left-model", "lane-right-model"].forEach(function (id) {
+    ["task", "workspace", "primary-model", "lane-left-model", "lane-right-model"].forEach(function (id) {
       el(id).disabled = locked;
     });
     el("cancel").disabled = !locked;
     syncSubmitState();
-  }
-  // Remember the last used workspace; restored on load when it still exists.
-  function rememberWorkspace() {
-    var w = currentWorkspace();
-    if (w === "") return;
-    localforage.setItem("workspace", w).catch(function () {});
-  }
-  function restoreWorkspace() {
-    localforage.getItem("workspace").then(function (saved) {
-      if (typeof saved !== "string" || saved === "") return;
-      fetch("/api/workspace/check", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ path: saved })
-      })
-        .then(function (res) { return res.json(); })
-        .then(function (data) {
-          if (data && data.exists) {
-            el("workspace").value = saved;
-          } else {
-            localforage.removeItem("workspace").catch(function () {});
-          }
-          syncSubmitState();
-        })
-        .catch(function () { syncSubmitState(); });
-    }).catch(function () { syncSubmitState(); });
   }
   function startRun() {
     state.running = true;
@@ -368,7 +360,6 @@ function pageHtml(): string {
     el("submit").addEventListener("click", function () {
       if (state.running || !ws || ws.readyState !== 1) return;
       var workspace = currentWorkspace();
-      rememberWorkspace();
       ws.send(JSON.stringify({
         type: "submit",
         request: {
@@ -382,7 +373,6 @@ function pageHtml(): string {
         }
       }));
     });
-    el("workspace").addEventListener("input", function () { syncSubmitState(); });
 
     el("cancel").addEventListener("click", function () {
       if (state.running && ws && ws.readyState === 1) {
@@ -392,8 +382,8 @@ function pageHtml(): string {
   }
 
   populateModelLists();
+  populateWorkspaceList();
   openSocket();
-  restoreWorkspace();
   syncSubmitState();
 })();
 </script>
@@ -609,13 +599,6 @@ async function handleRequest(
 	if (method === "GET" && (url === "/" || url === "/index.html")) {
 		res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
 		res.end(pageHtml());
-		return;
-	}
-	if (method === "GET" && url === "/vendor/localforage.js") {
-		// The published localforage UMD build, served so the page can persist
-		// the remembered workspace (ticket #13). No bundler: this static file.
-		res.writeHead(200, { "content-type": "text/javascript; charset=utf-8" });
-		res.end(localforageScript());
 		return;
 	}
 	if (method === "GET" && url === "/api/models") {

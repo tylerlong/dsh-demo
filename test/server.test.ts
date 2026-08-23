@@ -21,8 +21,8 @@ import {
 	type ModelOption,
 	type ServerHandle,
 	type ServerOptions,
-	type WorkspaceOption,
 	startServer,
+	type WorkspaceOption,
 } from "../src/server.ts";
 
 /** The agreed default selection (primary & left lane: DeepSeek V4 Flash 0731; right lane: GPT 5.6 Luna). */
@@ -127,15 +127,16 @@ describe("static page", () => {
 		expect(html).toMatch(/submit/i);
 		expect(html).toMatch(/cancel/i);
 
-		// Workspace input lives in the run configuration and is empty by default;
-		// submit is served disabled (enabled only once a workspace is entered),
-		// and the published localforage build is served for remembering it.
-		expect(html).toContain('id="workspace"');
-		expect(html).toContain('<input id="workspace" type="text"');
+		// The workspace picker is a dropdown seeded from the shared catalog served
+		// by /api/workspaces (replacing the free-text input); an empty catalog
+		// shows a hint pointing at DSH web. Submit is served disabled.
+		expect(html).toContain('<select id="workspace"');
+		expect(html).toContain('id="workspace-hint"');
+		expect(html).toContain("/api/workspaces");
+		expect(html).toContain("newestSessionAt");
 		expect(html).toContain(
 			'<button id="submit" type="button" disabled>Submit</button>',
 		);
-		expect(html).toContain("/vendor/localforage.js");
 
 		// Two lanes, each with a model dropdown and an output panel.
 		expect(html).toContain('id="lane-left-model"');
@@ -145,15 +146,11 @@ describe("static page", () => {
 	});
 });
 
-describe("vendor localforage asset", () => {
-	it("serves the published localforage UMD build for remembering the workspace", async () => {
+describe("obsolete vendor localforage asset", () => {
+	it("is gone — the route returns 404", async () => {
 		const handle = await start({ port: 0 });
 		const res = await fetch(`${handle.url}/vendor/localforage.js`);
-		expect(res.status).toBe(200);
-		expect(res.headers.get("content-type")).toContain("text/javascript");
-		const body = await res.text();
-		expect(body.length).toBeGreaterThan(1000);
-		expect(body).toMatch(/localforage/);
+		expect(res.status).toBe(404);
 	});
 });
 
@@ -521,5 +518,13 @@ describe("client run-lifecycle wiring", () => {
 		// Cancel winds running lanes down to a canceled chip; done marks them done.
 		expect(html).toContain('finishLane(lane, "canceled", "canceled")');
 		expect(html).toContain('finishLane(lane, "done", "done")');
+		// Submit carries the chosen workspace's path from the dropdown, rows show
+		// title + path, and no local remember/check wiring remains.
+		expect(html).toContain("currentWorkspace()");
+		expect(html).toContain("option.value = w.path");
+		expect(html).toContain('w.title + " (" + w.path + ")"');
+		expect(html).not.toContain("localforage");
+		expect(html).not.toContain("/api/workspace/check");
+		expect(html).not.toContain("rememberWorkspace");
 	});
 });

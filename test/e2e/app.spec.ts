@@ -1,15 +1,6 @@
 import { expect, test } from "@playwright/test";
 
 /**
- * The localforage UMD global is injected by the served /vendor/localforage.js
- * script. The declared shape is the subset these tests use; the evaluate
- * callbacks below resolve it from the browser global scope at runtime.
- */
-declare const localforage: {
-	setItem(key: string, value: string): Promise<string>;
-};
-
-/**
  * dsh-compare end-to-end tests against the real server (see playwright.config.ts).
  *
  * These pin the actual browser experience: the page must load without console
@@ -17,6 +8,13 @@ declare const localforage: {
  * /api/models, and a submitted run must start both lanes, stream output, and
  * reach a terminal state (done or canceled) with the UI returning to an
  * unlocked state.
+ *
+ * The workspace picker is a dropdown seeded once on page load from the shared
+ * catalog (/api/workspaces), so these tests need at least one registered
+ * workspace in the local harness home (~/.dsh) — the same catalog DSH web
+ * shows. Empty-catalog / no-free-text-fallback coverage belongs to the wider
+ * e2e flow (parent ticket #21); the localforage remember/restore tests were
+ * removed with the free-text input (ticket #20).
  */
 
 /** A tiny task: fast models finish it in well under a second. */
@@ -26,13 +24,7 @@ const FAST_TASK = "Reply with the single word: ready";
 const LONG_TASK =
 	"Write a detailed 1000-word essay about the history of computing from 1940 to the present, covering hardware, software, and the internet.";
 
-/**
- * The workspace used for runs in these tests. The playwright webServer boots
- * pnpm serve with the repo as its cwd, so this resolves to an existing folder.
- */
-const WORKSPACE = ".";
-
-test("page loads, WS connects, dropdowns populate, workspace input, no console errors", async ({
+test("page loads, WS connects, dropdowns populate, no console errors", async ({
 	page,
 }) => {
 	const errors: string[] = [];
@@ -48,7 +40,7 @@ test("page loads, WS connects, dropdowns populate, workspace input, no console e
 		timeout: 15_000,
 	});
 
-	// All three dropdowns populate from /api/models (the harness model list).
+	// All three model dropdowns populate from /api/models (the harness model list).
 	const primaryCount = await page.locator("#primary-model option").count();
 	expect(primaryCount).toBeGreaterThan(0);
 	await expect(page.locator("#lane-left-model option")).toHaveCount(
@@ -58,50 +50,15 @@ test("page loads, WS connects, dropdowns populate, workspace input, no console e
 		primaryCount,
 	);
 
-	// The workspace input is present and empty by default; submit starts disabled
-	// and enables only once a workspace is entered.
-	await expect(page.locator("#workspace")).toBeVisible();
-	await expect(page.locator("#workspace")).toHaveValue("");
-	await expect(page.locator("#submit")).toBeDisabled();
-	await page.fill("#workspace", WORKSPACE);
+	// The workspace dropdown is seeded from the shared catalog and its most
+	// recently used workspace is preselected, so submit is enabled.
+	const workspaceCount = await page.locator("#workspace option").count();
+	expect(workspaceCount).toBeGreaterThan(0);
 	await expect(page.locator("#submit")).toBeEnabled();
 
 	// No console or page errors — a syntax error in the served script would
-	// fail here (regression: the inline script must parse; the localforage UMD
-	// build must also load without throwing).
+	// fail here (regression: the inline script must parse).
 	expect(errors).toEqual([]);
-});
-
-test("remembered workspace is restored on load when the folder exists", async ({
-	page,
-}) => {
-	await page.goto("/");
-	await expect(page.locator("#conn-status")).toHaveText("connected", {
-		timeout: 15_000,
-	});
-
-	// Seed the remembered value, then reload so the page restores it.
-	await page.evaluate((w) => localforage.setItem("workspace", w), WORKSPACE);
-	await page.reload();
-	await expect(page.locator("#workspace")).toHaveValue(WORKSPACE);
-	await expect(page.locator("#submit")).toBeEnabled();
-});
-
-test("remembered workspace is cleared on load when the folder is missing", async ({
-	page,
-}) => {
-	await page.goto("/");
-	await expect(page.locator("#conn-status")).toHaveText("connected", {
-		timeout: 15_000,
-	});
-
-	// Seed a stale path, then reload: the page must NOT restore it and must
-	// clear it, leaving the input empty and submit disabled.
-	const missing = "/definitely/not/a/real/workspace/path";
-	await page.evaluate((w) => localforage.setItem("workspace", w), missing);
-	await page.reload();
-	await expect(page.locator("#workspace")).toHaveValue("");
-	await expect(page.locator("#submit")).toBeDisabled();
 });
 
 test("submit runs the full comparison: both lanes done, no summary, inputs unlock", async ({
@@ -116,7 +73,7 @@ test("submit runs the full comparison: both lanes done, no summary, inputs unloc
 	});
 
 	await page.fill("#task", FAST_TASK);
-	await page.fill("#workspace", WORKSPACE);
+	await page.selectOption("#workspace", { index: 0 });
 	await expect(page.locator("#submit")).toBeEnabled();
 	await page.click("#submit");
 
@@ -155,7 +112,7 @@ test("cancel aborts a running comparison and returns the UI to idle", async ({
 
 	// A long task keeps the run in flight so we can cancel it.
 	await page.fill("#task", LONG_TASK);
-	await page.fill("#workspace", WORKSPACE);
+	await page.selectOption("#workspace", { index: 0 });
 	await page.click("#submit");
 
 	// Both lanes start (running chips) — the run is genuinely in progress.
