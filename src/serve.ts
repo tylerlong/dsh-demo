@@ -15,7 +15,8 @@
 import { bootHarness } from "./boot.ts";
 import {
 	loadModelsFromContext,
-	loadWorkspacesFromContext,
+	loadSessionsFromContext,
+	loadTranscriptFromContext,
 } from "./harness-adapters.ts";
 import { createRunFactory } from "./real-run-factory.ts";
 import { startServer } from "./server.ts";
@@ -28,11 +29,12 @@ try {
 	await ctx.get("loader")?.await();
 	const handle = await startServer({
 		port: PORT,
-		// The model and workspace loaders come straight off the booted context
-		// via the typed adapters (no casts in the product path); see
-		// harness-adapters.ts.
+		// The model, session-tree, and transcript loaders come straight off the
+		// booted context via the typed adapters (no casts in the product path);
+		// see harness-adapters.ts.
 		loadModels: loadModelsFromContext(ctx),
-		loadWorkspaces: loadWorkspacesFromContext(ctx),
+		loadSessions: loadSessionsFromContext(ctx),
+		loadTranscript: loadTranscriptFromContext(ctx),
 		// Production wires the seam to the harness-backed factory.
 		startRun: createRunFactory(ctx),
 	});

@@ -1,9 +1,10 @@
 /**
  * harness-adapters.ts — typed wiring from the booted harness context to the
- * server's structural seams (model-list.ts, workspace-list.ts).
+ * server's structural seams (model-list.ts, session-tree.ts,
+ * session-transcript.ts).
  *
- * serve.ts boots the shared harness tree and starts the server; the two
- * loaders the server needs come straight off that booted context:
+ * serve.ts boots the shared harness tree and starts the server; the loaders
+ * the server needs come straight off that booted context:
  *
  *   - `ctx.llm` — the typed llm registry (`LlmRuntime`, structurally an
  *     {@link LlmLike}) — feeds the /api/models dropdown loader directly, with
@@ -11,22 +12,29 @@
  *     runtime `listProviders` / `listModels` signatures match the seam.
  *   - the workspace registry and session store are read by name off the same
  *     context (the shared storage stack boot.ts mounts) and pinned to the
- *     workspace-seam shapes (`WorkspaceRegistryLike` / `SessionStoreLike`), so
- *     the product path carries no `as unknown as` cast.
+ *     session-browser seam shapes (`WorkspaceRegistryLike` / `SessionStoreLike`
+ *     for the tree, `TranscriptStoreLike` for the transcript read), so the
+ *     product path carries no `as unknown as` cast.
  *
  * The structural seams are unchanged: server tests inject fake loaders
- * (`loadModels` / `loadWorkspaces`) directly and never reach this module.
+ * (`loadModels` / `loadSessions` / `loadTranscript`) directly and never reach
+ * this module.
  */
 import type { Context } from "@deepseek-ai/cordis";
 import type { LlmRuntime } from "@deepseek-ai/dsh-llm";
 import type { ModelOption } from "./model-list.ts";
 import { convertLlmModels } from "./model-list.ts";
-import type { WorkspaceOption } from "./workspace-list.ts";
+import type { SessionTranscript } from "./session-transcript.ts";
 import {
-	convertWorkspaceList,
+	convertSessionTranscript,
+	type TranscriptStoreLike,
+} from "./session-transcript.ts";
+import type { WorkspaceNode } from "./session-tree.ts";
+import {
+	convertSessionTree,
 	type SessionStoreLike,
 	type WorkspaceRegistryLike,
-} from "./workspace-list.ts";
+} from "./session-tree.ts";
 
 /**
  * Pin one named context service to a declared shape. `ctx.get` is untyped
@@ -56,21 +64,42 @@ export function loadModelsFromContext(
 }
 
 /**
- * The /api/workspaces loader supplied from the booted context: the shared
+ * The /api/sessions loader supplied from the booted context: the shared
  * workspace registry and session store (the storage stack boot.ts mounts),
- * pinned to the workspace-seam shapes. A read failure resolves to [] and logs,
- * matching serve.ts today.
+ * pinned to the session-tree seam shapes. Strictly read-only — only
+ * `registry.list()` and `sessionPersistence.list()`, never a mutation. A read
+ * failure resolves to [] and logs, matching serve.ts today.
  */
-export function loadWorkspacesFromContext(
+export function loadSessionsFromContext(
 	ctx: Context,
-): () => Promise<readonly WorkspaceOption[]> {
+): () => Promise<readonly WorkspaceNode[]> {
 	const registry: WorkspaceRegistryLike = service(ctx, "workspaceRegistry");
 	const sessions: SessionStoreLike = service(ctx, "sessionPersistence");
 	return () =>
-		convertWorkspaceList(registry, sessions).catch((error) => {
+		convertSessionTree(registry, sessions).catch((error) => {
 			console.error(
-				`harness-workflow: failed to read the shared workspace list: ${error instanceof Error ? error.message : error}`,
+				`harness-workflow: failed to read the shared session tree: ${error instanceof Error ? error.message : error}`,
 			);
 			return [];
+		});
+}
+
+/**
+ * The /api/sessions/:id/transcript loader supplied from the booted context:
+ * the shared session store, pinned to the transcript-read seam shape. Strictly
+ * read-only — only `store.list()` and `store.inspect()`, never a mutation. A
+ * read failure resolves to an empty transcript ([]-equivalent) and logs,
+ * matching serve.ts today.
+ */
+export function loadTranscriptFromContext(
+	ctx: Context,
+): (sessionId: string) => Promise<SessionTranscript> {
+	const store: TranscriptStoreLike = service(ctx, "sessionPersistence");
+	return (sessionId) =>
+		convertSessionTranscript(store, sessionId).catch((error) => {
+			console.error(
+				`harness-workflow: failed to read session ${sessionId} transcript: ${error instanceof Error ? error.message : error}`,
+			);
+			return { primary: { sessionId, lines: [] }, lanes: [] };
 		});
 }

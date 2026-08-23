@@ -17,11 +17,15 @@
  * request through the proxy leaves the dev server's upgraded socket to the
  * backend open, which would make the teardown's server.close() wait for it.
  */
+import { mkdtempSync, rmSync } from "node:fs";
 import { get as httpGet } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer as createViteServer, type ViteDevServer } from "vite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import WebSocket from "ws";
+import { WS_PATH } from "../shared/protocol.ts";
 import {
 	createScriptedRunFactory,
 	type RunEvent,
@@ -31,9 +35,8 @@ import {
 	type ModelOption,
 	type ServerHandle,
 	startServer,
-	type WorkspaceOption,
+	type WorkspaceNode,
 } from "../src/server.ts";
-import { WS_PATH } from "../shared/protocol.ts";
 import { devProxy } from "../web/vite.config.ts";
 
 /** Injected fake model rows, as in server.test.ts. */
@@ -50,13 +53,13 @@ const MODELS: ModelOption[] = [
 	},
 ];
 
-/** Injected fake workspace rows, as in server.test.ts. */
-const WORKSPACES: WorkspaceOption[] = [
+/** Injected fake session-tree rows, as in server.test.ts. */
+const SESSIONS: WorkspaceNode[] = [
 	{
 		id: "ws-alpha",
 		path: "/opt/alpha-project",
 		title: "Alpha",
-		newestSessionAt: 1700000000000,
+		sessions: [{ id: "session-1", createdAt: 1700000000000 }],
 	},
 ];
 
@@ -84,9 +87,7 @@ function getText(path: string): Promise<{ status: number; body: string }> {
 				res.on("data", (chunk) => {
 					body += String(chunk);
 				});
-				res.on("end", () =>
-					resolve({ status: res.statusCode ?? 0, body }),
-				);
+				res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
 			},
 		);
 		req.on("error", reject);
@@ -98,7 +99,11 @@ beforeAll(async () => {
 	backend = await startServer({
 		port: 0,
 		loadModels: () => MODELS,
-		loadWorkspaces: () => WORKSPACES,
+		loadSessions: () => SESSIONS,
+		loadTranscript: () => ({
+			primary: { sessionId: "session-1", lines: ["primary text"] },
+			lanes: [],
+		}),
 		startRun: factory.startRun,
 	});
 	// The real Vite dev server, proxying to the test backend: the same
@@ -161,19 +166,17 @@ describe("dev proxy — API routes", () => {
 		expect(body.models).toEqual(MODELS);
 	});
 
-	it("proxies GET /api/workspaces to the backend", async () => {
-		const res = await getText("/api/workspaces");
+	it("proxies GET /api/sessions to the backend", async () => {
+		const res = await getText("/api/sessions");
 		expect(res.status).toBe(200);
-		const body = JSON.parse(res.body) as WorkspaceOption[];
-		expect(body).toEqual(WORKSPACES);
+		const body = JSON.parse(res.body) as WorkspaceNode[];
+		expect(body).toEqual(SESSIONS);
 	});
 });
 
 describe("dev proxy — WebSocket endpoint", () => {
 	it("proxies the WebSocket upgrade and a run lifecycle to the backend", async () => {
-		const ws = new WebSocket(
-			`ws://127.0.0.1:${vitePort}${WS_PATH}`,
-		);
+		const ws = new WebSocket(`ws://127.0.0.1:${vitePort}${WS_PATH}`);
 		const received: RunEvent[] = [];
 		ws.on("message", (data) => received.push(parse<RunEvent>(data)));
 		try {

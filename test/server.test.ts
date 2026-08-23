@@ -27,8 +27,9 @@ import {
 	type ModelOption,
 	type ServerHandle,
 	type ServerOptions,
+	type SessionTranscript,
 	startServer,
-	type WorkspaceOption,
+	type WorkspaceNode,
 } from "../src/server.ts";
 
 /** The agreed default selection (primary & left lane: DeepSeek V4 Flash 0731; right lane: GPT 5.6 Luna). */
@@ -56,21 +57,36 @@ const MODELS: ModelOption[] = [
 	},
 ];
 
-/** Injected fake workspace rows served over /api/workspaces (ticket #19). */
-const WORKSPACES: WorkspaceOption[] = [
+/** Injected fake session-tree rows served over /api/sessions (ticket #38). */
+const SESSIONS: WorkspaceNode[] = [
 	{
 		id: "ws-alpha",
 		path: "/opt/alpha-project",
 		title: "Alpha",
-		newestSessionAt: 1700000000000,
+		sessions: [
+			{ id: "session-1", createdAt: 1700000000000 },
+			{ id: "session-2", createdAt: 1700000500000 },
+		],
 	},
 	{
 		id: "ws-beta",
 		path: "/opt/beta-project",
 		title: "Beta",
-		newestSessionAt: 1700000500000,
+		sessions: [{ id: "session-3", createdAt: 1700001000000 }],
 	},
 ];
+
+/** Injected fake transcript read served over /api/sessions/:id/transcript. */
+const TRANSCRIPT: SessionTranscript = {
+	primary: {
+		sessionId: "session-1",
+		lines: ["task: compare two models", "spawning workers"],
+	},
+	lanes: [
+		{ sessionId: "session-left", lines: ["left answer"] },
+		{ sessionId: "session-right", lines: ["right answer"] },
+	],
+};
 
 /** The frontend source root, whose production build the static-page suite serves. */
 const WEB_ROOT = fileURLToPath(new URL("../web", import.meta.url));
@@ -90,7 +106,8 @@ const live: ServerHandle[] = [];
 function serverOptions(overrides: Partial<ServerOptions> = {}): ServerOptions {
 	return {
 		loadModels: () => MODELS,
-		loadWorkspaces: () => WORKSPACES,
+		loadSessions: () => SESSIONS,
+		loadTranscript: () => TRANSCRIPT,
 		...overrides,
 	};
 }
@@ -181,21 +198,51 @@ describe("model list endpoint", () => {
 	});
 });
 
-describe("workspace list endpoint", () => {
-	it("serves the injected workspace rows", async () => {
+describe("session tree endpoint", () => {
+	it("serves the injected session tree (workspaces with their sessions)", async () => {
 		const handle = await start({ port: 0 });
-		const res = await fetch(`${handle.url}/api/workspaces`);
+		const res = await fetch(`${handle.url}/api/sessions`);
 		expect(res.status).toBe(200);
-		const body = (await res.json()) as WorkspaceOption[];
-		expect(body).toEqual(WORKSPACES);
+		const body = (await res.json()) as WorkspaceNode[];
+		expect(body).toEqual(SESSIONS);
 	});
 
-	it("serves an injected empty list", async () => {
-		const handle = await start({ port: 0, loadWorkspaces: () => [] });
-		const res = await fetch(`${handle.url}/api/workspaces`);
+	it("serves an injected empty tree", async () => {
+		const handle = await start({ port: 0, loadSessions: () => [] });
+		const res = await fetch(`${handle.url}/api/sessions`);
 		expect(res.status).toBe(200);
-		const body = (await res.json()) as WorkspaceOption[];
+		const body = (await res.json()) as WorkspaceNode[];
 		expect(body).toEqual([]);
+	});
+});
+
+describe("session transcript endpoint", () => {
+	it("serves the injected transcript read for the selected session", async () => {
+		const handle = await start({ port: 0 });
+		const res = await fetch(`${handle.url}/api/sessions/session-1/transcript`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as SessionTranscript;
+		expect(body).toEqual(TRANSCRIPT);
+	});
+
+	it("forwards the requested session id to the injected loader", async () => {
+		const requested: string[] = [];
+		const handle = await start({
+			port: 0,
+			loadTranscript: (sessionId) => {
+				requested.push(sessionId);
+				return { primary: { sessionId, lines: [] }, lanes: [] };
+			},
+		});
+		const res = await fetch(`${handle.url}/api/sessions/session-42/transcript`);
+		expect(res.status).toBe(200);
+		expect(requested).toEqual(["session-42"]);
+	});
+
+	it("404s a malformed transcript route", async () => {
+		const handle = await start({ port: 0 });
+		const res = await fetch(`${handle.url}/api/sessions/transcript`);
+		expect(res.status).toBe(404);
 	});
 });
 

@@ -5,16 +5,18 @@
  * that serves the built React frontend (web/dist, produced by the serve
  * command's vite build) as a generic static file server and upgrades to
  * WebSocket. The frontend is a TypeScript + Vite + React single-page
- * application (see web/); its model and workspace dropdowns populate at
- * runtime from the harness's configured model list (see model-list.ts) via
- * GET /api/models and from the shared workspace catalog via GET /api/workspaces.
+ * application (see web/); its model dropdowns populate at runtime from the
+ * harness's configured model list (see model-list.ts) via GET /api/models,
+ * and the session browser's left panel reads the shared workspace + session
+ * catalog via GET /api/sessions (see session-tree.ts) with the transcript
+ * read at GET /api/sessions/:id/transcript (see session-transcript.ts).
  *
  * The server implements the full run lifecycle over each WebSocket
  * connection (submit / cancel / streaming, per-tab isolation) via the
  * injected run-factory seam; the harness-backed factory is wired in serve.ts.
  *
  * Run directly with `pnpm serve` (boots the harness for the model list), or
- * embed the seam: tests inject `startServer` with a fixed loadModels.
+ * embed the seam: tests inject `startServer` with fixed loaders.
  */
 import { readFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
@@ -26,12 +28,15 @@ import { WS_PATH } from "../shared/protocol.ts";
 import type { ModelOption } from "./model-list.ts";
 import { resolveDefaults } from "./model-list.ts";
 import type { RunHandle, StartRun } from "./run-factory.ts";
-import type { WorkspaceOption } from "./workspace-list.ts";
+import type { SessionTranscript } from "./session-transcript.ts";
+import type { WorkspaceNode } from "./session-tree.ts";
 
 /** Re-export the dropdown option shape the /api/models endpoint serves. */
 export type { ModelOption } from "./model-list.ts";
-/** Re-export the workspace row shape the /api/workspaces endpoint serves. */
-export type { WorkspaceOption } from "./workspace-list.ts";
+/** Re-export the transcript shape the /api/sessions/:id/transcript endpoint serves. */
+export type { SessionTranscript } from "./session-transcript.ts";
+/** Re-export the session-tree node shape the /api/sessions endpoint serves. */
+export type { WorkspaceNode } from "./session-tree.ts";
 
 /** Default host the server binds to (loopback only). */
 export const DEFAULT_HOST = "127.0.0.1";
@@ -54,15 +59,25 @@ export interface ServerOptions {
 		| Promise<readonly ModelOption[]>
 		| readonly ModelOption[];
 	/**
-	 * Inject the workspace list (ticket #19), mirroring {@link loadModels}.
+	 * Inject the session tree (ticket #38), mirroring {@link loadModels}.
 	 * Production passes a loader backed by the shared workspace registry and
-	 * the shared session store (see workspace-list.ts); tests inject a fixed
-	 * list. Backs GET /api/workspaces so the page can seed its workspace
-	 * dropdown and preselect the most recently used workspace.
+	 * the shared session store (see session-tree.ts); tests inject a fixed
+	 * tree. Backs GET /api/sessions so the page can seed its read-only
+	 * workspace → sessions tree on load.
 	 */
-	readonly loadWorkspaces: () =>
-		| Promise<readonly WorkspaceOption[]>
-		| readonly WorkspaceOption[];
+	readonly loadSessions: () =>
+		| Promise<readonly WorkspaceNode[]>
+		| readonly WorkspaceNode[];
+	/**
+	 * Inject the read-only transcript read (ticket #38): one selected session's
+	 * recent ~100-line window (primary + lane-worker children via
+	 * parentSession), read from the shared session store (see
+	 * session-transcript.ts). Production passes a loader backed by the booted
+	 * context; tests inject a fixed read. Backs GET /api/sessions/:id/transcript.
+	 */
+	readonly loadTranscript: (
+		sessionId: string,
+	) => Promise<SessionTranscript> | SessionTranscript;
 	/**
 	 * Inject the run factory (ticket #4): the server's only dependency on
 	 * orchestration. Tests inject the scripted fake (run-factory.ts); the
@@ -355,7 +370,7 @@ function isRunRequest(value: unknown): value is RunRequest {
 	);
 }
 
-/** Handle one http request: a built frontend file, the model list, the workspace list, or a 404. */
+/** Handle one http request: a built frontend file, the model list, the session tree / transcript, or a 404. */
 async function handleRequest(
 	req: import("node:http").IncomingMessage,
 	res: import("node:http").ServerResponse,
@@ -372,10 +387,24 @@ async function handleRequest(
 		res.end(JSON.stringify({ models, defaults }));
 		return;
 	}
-	if (method === "GET" && url === "/api/workspaces") {
-		const workspaces = await options.loadWorkspaces();
+	if (method === "GET" && url === "/api/sessions") {
+		// The read-only session tree (workspaces with their sessions), loaded
+		// once on page load by the session browser's left panel (ticket #38).
+		const sessions = await options.loadSessions();
 		res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
-		res.end(JSON.stringify(workspaces));
+		res.end(JSON.stringify(sessions));
+		return;
+	}
+	const transcriptMatch = /^\/api\/sessions\/([^/]+)\/transcript$/.exec(
+		url.split("?")[0] ?? "",
+	);
+	if (method === "GET" && transcriptMatch !== null) {
+		// The read-only transcript read for one selected session: the primary
+		// session and its lane-worker children, as a recent ~100-line window.
+		const sessionId = decodeURIComponent(transcriptMatch[1] ?? "");
+		const transcript = await options.loadTranscript(sessionId);
+		res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+		res.end(JSON.stringify(transcript));
 		return;
 	}
 	const file = staticFileFor(url);
