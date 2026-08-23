@@ -42,7 +42,7 @@ all subagents of the primary, each on its own model.
 | `root.cordis.yml` | Empty plugin list — the tree is composed purely from the base bundle patches; it is the root include each script boots. |
 | `dsh-demo.config.json` | Optional location overrides (see below). Absent/empty → shared harness home defaults. |
 | `settings.yaml`, `.credentials.yaml`, `.dsh-sessions/` | Project-local overrides, **only** used when `dsh-demo.config.json` points at them. Gitignored. |
-| `package.json` | `link:` deps to the DSH monorepo packages, `tsx` SDK dev deps, `demo` / `enhanced` scripts. |
+| `package.json` | Published `@deepseek-ai/*` package deps (semver ranges), `tsx` SDK dev deps, `demo` / `enhanced` / `serve` scripts. |
 | `tsconfig.json` | Typecheck config (`pnpm typecheck`). |
 
 ## How a standalone script boots

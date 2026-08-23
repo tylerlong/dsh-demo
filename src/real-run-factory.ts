@@ -213,13 +213,20 @@ export function createRunFactory(ctx: Context): StartRun {
 					}
 					const reason = workerFailureReason(result);
 					emit({ type: "lane/worker/error", laneId: lane, reason });
+					// The reason stays server-side (console only); the summary
+					// prompt gets a neutral note so it never reaches the UI.
 					return {
 						lane,
 						model,
-						text: `(${lane} lane worker failed: ${reason})`,
+						text: `(${lane} lane worker failed)`,
 					};
 				} finally {
 					stopWatching();
+					// Dispose exactly once: drop the run from the shared list
+					// first, so disposeAll() (cancel / flow teardown) never
+					// disposes an already-settled run again.
+					const index = workerRuns.indexOf(run);
+					if (index !== -1) workerRuns.splice(index, 1);
 					await run.dispose().catch(() => {});
 				}
 			} catch (error) {
@@ -228,10 +235,12 @@ export function createRunFactory(ctx: Context): StartRun {
 				}
 				const reason = messageOf(error);
 				emit({ type: "lane/worker/error", laneId: lane, reason });
+				// The reason stays server-side (console only); the summary
+				// prompt gets a neutral note so it never reaches the UI.
 				return {
 					lane,
 					model,
-					text: `(${lane} lane worker failed: ${reason})`,
+					text: `(${lane} lane worker failed)`,
 				};
 			}
 		};

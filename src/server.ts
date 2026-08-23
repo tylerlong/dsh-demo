@@ -8,9 +8,9 @@
  * output panel. Dropdowns are populated at runtime from the harness's
  * configured model list (see model-list.ts) via GET /api/models.
  *
- * Ticket #3 scope is the server + WebSocket + UI shell only: the server
- * accepts WebSocket connections but does not yet run the lifecycle over them
- * (submit / cancel / streaming is ticket #4).
+ * The server implements the full run lifecycle over each WebSocket
+ * connection (submit / cancel / streaming, per-tab isolation) via the
+ * injected run-factory seam; the harness-backed factory is wired in serve.ts.
  *
  * Run directly with `pnpm serve` (boots the harness for the model list), or
  * embed the seam: tests inject `startServer` with a fixed loadModels.
@@ -372,6 +372,11 @@ export async function startServer(
 		url,
 		wsUrl,
 		close: async () => {
+			// Terminate open WebSocket clients first: server.close() waits for
+			// open connections, so a tab left open would hang shutdown.
+			for (const client of wss.clients) {
+				client.terminate();
+			}
 			wss.close();
 			await new Promise<void>((resolve, reject) => {
 				server.close((error) => {
