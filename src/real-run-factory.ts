@@ -183,11 +183,19 @@ export function createRunFactory(ctx: Context): StartRun {
 		const runWorker = async (
 			lane: LaneId,
 			model: string,
-			provider: string,
+			providers: Map<string, string>,
 			orchestrator: Agent,
 		): Promise<LaneOutcome> => {
 			emit({ type: "lane/worker/started", laneId: lane });
 			try {
+				// Resolve this lane's provider lazily so a bad model id errors
+				// only its lane; the sibling lane keeps running (parent story 20).
+				const provider = providers.get(model);
+				if (provider === undefined) {
+					throw new Error(
+						`no configured provider for ${lane} lane model "${model}"`,
+					);
+				}
 				const run = await ctx.subagents.start(SPAWN_PROVIDER, {
 					label: `lane-${lane}`,
 					prompt: [{ type: "text", text: workerPrompt(request.task) }],
@@ -249,21 +257,11 @@ export function createRunFactory(ctx: Context): StartRun {
 		const orchestrate = async (): Promise<void> => {
 			const providers = await resolveProviders(ctx);
 			const primaryProvider = providers.get(request.primaryModel);
-			const leftProvider = providers.get(request.laneModels.left);
-			const rightProvider = providers.get(request.laneModels.right);
+			// Lane providers are resolved lazily inside runWorker so one bad
+			// lane model errors only its lane (parent story 20).
 			if (primaryProvider === undefined) {
 				throw new Error(
 					`no configured provider for primary model "${request.primaryModel}"`,
-				);
-			}
-			if (leftProvider === undefined) {
-				throw new Error(
-					`no configured provider for left lane model "${request.laneModels.left}"`,
-				);
-			}
-			if (rightProvider === undefined) {
-				throw new Error(
-					`no configured provider for right lane model "${request.laneModels.right}"`,
 				);
 			}
 
@@ -288,13 +286,8 @@ export function createRunFactory(ctx: Context): StartRun {
 			// Both workers run concurrently; each lane settles independently.
 			lanesStarted = true;
 			const [left, right] = await Promise.all([
-				runWorker("left", request.laneModels.left, leftProvider, orchestrator),
-				runWorker(
-					"right",
-					request.laneModels.right,
-					rightProvider,
-					orchestrator,
-				),
+				runWorker("left", request.laneModels.left, providers, orchestrator),
+				runWorker("right", request.laneModels.right, providers, orchestrator),
 			]);
 			if (controller.signal.aborted) return;
 

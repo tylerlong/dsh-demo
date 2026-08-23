@@ -364,7 +364,54 @@ describe("real run factory", () => {
 		expect(events.some((e) => e.type === "run/done")).toBe(false);
 	});
 
-	it("an unresolvable model errors both lanes and still ends the run", async () => {
+	it("a bad lane model id errors only its lane while the other lane keeps running", async () => {
+		// Only the left lane's model is configured; the right lane's id is
+		// unresolvable. The right lane must error on its own while the left
+		// lane still runs and the run reaches a summary + done (parent story 20).
+		const harness = makeHarness([MODELS[0] as (typeof MODELS)[number]]);
+		const request: RunRequest = {
+			...REQUEST,
+			laneModels: {
+				left: "deepseek/deepseek-v4-flash-0731",
+				right: "no-such/model",
+			},
+		};
+		const { events } = startRun(harness, request);
+
+		// The right lane errors on its own; the left lane still spawns.
+		await waitUntil(() => harness.spawned.length === 1);
+		expect(
+			events.some(
+				(e) => e.type === "lane/worker/error" && e.laneId === "right",
+			),
+		).toBe(true);
+
+		// Settle the left worker so the run reaches a summary + done.
+		harness.orchestratorEvents = [
+			{
+				type: "assistant/message",
+				data: { message: { content: [{ type: "text", text: "summary" }] } },
+			},
+		];
+		harness.spawned[0]?.settle({ output: [], stopReason: "completed" });
+
+		await waitUntil(() => events.some((e) => e.type === "run/done"));
+
+		// The left lane still ran and completed.
+		expect(
+			events.some((e) => e.type === "lane/worker/done" && e.laneId === "left"),
+		).toBe(true);
+		// Only the right lane errored; the run still produced a summary + done.
+		const errors = events.filter((e) => e.type === "lane/worker/error");
+		expect(errors.length).toBe(1);
+		expect(events.some((e) => e.type === "run/summary")).toBe(true);
+		expect(events.at(-1)).toEqual({
+			type: "run/done",
+			runId: expect.any(String),
+		});
+	});
+
+	it("an unresolvable primary model errors both lanes and still ends the run", async () => {
 		const harness = makeHarness([]);
 		const { events } = startRun(harness);
 

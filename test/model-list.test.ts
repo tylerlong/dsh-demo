@@ -30,7 +30,7 @@ const MODELS: ModelOption[] = [
 ];
 
 describe("convertLlmModels", () => {
-	it("flattens each provider's model list into ModelOption entries", () => {
+	it("flattens each provider's model list into ModelOption entries", async () => {
 		const llm = {
 			listProviders: () => [{ id: "openrouter" }, { id: "local" }],
 			listModels: (provider: string) =>
@@ -47,7 +47,7 @@ describe("convertLlmModels", () => {
 						: [{ id: "local/llama", name: "Local Llama", provider }],
 				),
 		};
-		expect(convertLlmModels(llm as never)).resolves.toEqual([
+		expect(await convertLlmModels(llm as never)).toEqual([
 			{
 				id: "deepseek/deepseek-v4-flash-0731",
 				name: "DeepSeek V4 Flash 0731",
