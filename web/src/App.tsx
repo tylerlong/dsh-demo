@@ -86,6 +86,8 @@ export function App({
 	>(undefined);
 	const [transcriptLoading, setTranscriptLoading] = useState(false);
 	const [refreshKey, setRefreshKey] = useState(0);
+	// The task of the most recent run (shown as the primary's input line).
+	const [lastTask, setLastTask] = useState<string | undefined>(undefined);
 	// Which session the current transcript belongs to; used to keep the prior
 	// window visible during a live refresh (only a selection change blanks it).
 	const [transcriptFor, setTranscriptFor] = useState<string | undefined>(
@@ -230,13 +232,18 @@ export function App({
 						loadModels={loadModels}
 						sessionId={selectedSessionId}
 						locked={run.locked}
-						onSubmit={run.submit}
+						onSubmit={(request) => {
+							setLastTask(request.task);
+							run.submit(request);
+						}}
 						onCancel={run.cancel}
 					/>
 					<Transcript
 						sessionId={selectedSessionId}
 						transcript={transcript}
 						loading={transcriptLoading}
+						laneTexts={run.laneTexts}
+						task={lastTask}
 					/>
 					<section
 						aria-label="Run"
