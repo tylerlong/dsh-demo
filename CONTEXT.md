@@ -17,15 +17,19 @@ One side of the comparison: a model, the worker that performs the run's task on 
 _Avoid_: column, panel, side
 
 **session**:
-A persisted conversation in the shared DSH store (owned by DSH web), labeled by its session id. Continuing a session resumes it rather than creating a new one: the primary agent inherits its saved context and the run's new turns append to the same session.
+A persisted conversation in the shared DSH store (owned by DSH web), shown read-only in the browser and labeled by its stored title when one is set, else the placeholder "Untitled session". Within a workspace, sessions are ordered by creation time (newest first) and capped at the top 3; subagent sessions are filtered out. Continuing a session resumes it rather than creating a new one: the primary agent inherits its saved context and the run's new turns append to the same session.
 _Avoid_: thread, chat, dialog
+
+**transcript**:
+The right panel's read of one selected session's own recent ~100-line window from the store — primary-only: stored subagent children's histories are never read. Each line carries a role; model input (user-role) and model output (assistant-role) each get a distinct background, while tool/step/system lines keep the default style. The two lane-worker children of our own in-progress run appear alongside the primary only while that run is live; once stored, they are not loaded.
+_Avoid_: history, feed, log
 
 **workspace**:
 The folder a session runs in, derived from the resumed session's cwd (from its header) rather than chosen in the form. harness-workflow reads the shared DSH workspace catalog (owned by DSH web) read-only. It becomes the orchestrator's session cwd, and spawned workers inherit it. Considered read-only.
 _Avoid_: project folder, working directory, cwd
 
 **worker**:
-A read-only sub-agent spawned to perform the run's task on its lane's model. Workers only read from the workspace so concurrent lanes never conflict over edits.
+A read-only sub-agent spawned to perform the run's task on its lane's model. Workers only read from the workspace so concurrent lanes never conflict over edits. A worker's transcript appears live only while its own run is in progress; once stored, worker sessions are never loaded into the session list or the transcript.
 _Avoid_: task agent, sub-task, helper
 
 **orchestrator**:
