@@ -7,7 +7,7 @@
  * session is preselected and its row highlighted), and a right region with the
  * run configuration form (task, primary model, lane models; submit disabled
  * until a session is selected), the selected session's transcript (a recent
- * ~100-line window read from the store — never assembled from streamed
+ * prompt/answer window read from the store — never assembled from streamed
  * deltas), and the run section (run status + the two lanes' status chips).
  *
  * The run lifecycle hook (useRun) owns the WebSocket connection and the run
@@ -23,7 +23,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import type { SessionTranscript, SessionTree } from "./api.ts";
-import { fetchSessions, fetchTranscript, TRANSCRIPT_PAGE_SIZE } from "./api.ts";
+import { fetchSessions, fetchTranscript, TRANSCRIPT_LOAD_STEP } from "./api.ts";
 import { Lane } from "./Lane.tsx";
 import { RunConfigForm, type RunConfigFormProps } from "./RunConfigForm.tsx";
 import { SessionTree as SessionTreePanel } from "./SessionTree.tsx";
@@ -58,8 +58,8 @@ export interface AppProps {
 	/**
 	 * Load one session's transcript from the store; defaults to the
 	 * /api/sessions/:id/transcript fetch. `limit` sizes the primary window
-	 * (the last N lines), so "load more" grows it backward. Tests inject a
-	 * fake.
+	 * (the last N prompt/answer pairs), so "load more" grows it backward one
+	 * pair at a time. Tests inject a fake.
 	 */
 	readonly loadTranscript?: (
 		sessionId: string,
@@ -103,11 +103,12 @@ export function App({
 	);
 	const [transcriptLoading, setTranscriptLoading] = useState(false);
 	const [refreshKey, setRefreshKey] = useState(0);
-	// The primary window size requested from the store (the last N lines).
-	// "Load more" grows it by TRANSCRIPT_PAGE_SIZE; a session change resets it
-	// to the default window so a new selection never inherits another
-	// session's pagination.
-	const [transcriptLimit, setTranscriptLimit] = useState(TRANSCRIPT_PAGE_SIZE);
+	// The primary window size requested from the store (the last N prompt/
+	// answer pairs). Defaults to one pair — the most recent prompt plus its
+	// answer. "Load more" grows it by TRANSCRIPT_LOAD_STEP; a session change
+	// resets it to the default window so a new selection never inherits
+	// another session's pagination.
+	const [transcriptLimit, setTranscriptLimit] = useState(TRANSCRIPT_LOAD_STEP);
 	// The most recent run that actually began, bound to its session: the
 	// submitted task (shown as that session's primary input line) and the
 	// session the lane answers belong to. Keyed by session so switching
@@ -168,7 +169,7 @@ export function App({
 	// another session's pagination).
 	const selectSession = (sessionId: string): void => {
 		setSelectedSessionId(sessionId);
-		setTranscriptLimit(TRANSCRIPT_PAGE_SIZE);
+		setTranscriptLimit(TRANSCRIPT_LOAD_STEP);
 	};
 
 	const run = useRun({
@@ -357,7 +358,7 @@ export function App({
 							laneTexts={run.laneTexts}
 							runStart={runStart}
 							onLoadMore={() =>
-								setTranscriptLimit((limit) => limit + TRANSCRIPT_PAGE_SIZE)
+								setTranscriptLimit((limit) => limit + TRANSCRIPT_LOAD_STEP)
 							}
 						/>
 						<section

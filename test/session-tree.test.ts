@@ -6,18 +6,18 @@
  * The session browser's left panel is a two-level tree (workspace → its
  * sessions) sourced read-only from the shared workspace registry and session
  * store; the right panel renders the selected session's own output from the
- * store's recent ~100-line window — primary-only (child #46): stored subagent
- * children are never read, each line carries a role, and live lane windows of
- * our own in-progress run are supplied separately. These tests exercise the
- * two seams (convertSessionTree / convertSessionTranscript) with injected
- * fakes — no real harness — asserting the tree shape, the strict read-only
- * contract (only list() / inspect() are ever called, never a mutation), and
- * the recent-window behavior.
+ * store's recent prompt/answer window — primary-only (child #46): stored
+ * subagent children are never read, each line carries a role, and live lane
+ * windows of our own in-progress run are supplied separately. These tests
+ * exercise the two seams (convertSessionTree / convertSessionTranscript) with
+ * injected fakes — no real harness — asserting the tree shape, the strict
+ * read-only contract (only list() / inspect() are ever called, never a
+ * mutation), and the recent-window behavior.
  */
 import { describe, expect, it } from "vitest";
 import {
 	convertSessionTranscript,
-	TRANSCRIPT_WINDOW_LINES,
+	TRANSCRIPT_WINDOW_PAIRS,
 	type TranscriptEvent,
 	type TranscriptWindow,
 } from "../src/session-transcript.ts";
@@ -610,75 +610,76 @@ describe("session transcript seam", () => {
 		expect(transcript.lanes).toEqual([]);
 	});
 
-	it("keeps only the recent ~100-line window when the transcript is longer", async () => {
-		const longLines = Array.from(
-			{ length: TRANSCRIPT_WINDOW_LINES + 50 },
-			(_, i) => `line-${i}`,
-		);
+	it("keeps only the recent one prompt/answer pair when more pairs exist", async () => {
+		// Three full pairs (prompt + answer each), so the default one-pair
+		// window shows only the newest pair.
 		const { store } = fakeTranscriptStore({
 			"session-primary": [
-				messageEvent("assistant/message", longLines.join("\n")),
+				messageEvent("user/message", "prompt one"),
+				messageEvent("assistant/message", "answer one"),
+				messageEvent("user/message", "prompt two"),
+				messageEvent("assistant/message", "answer two"),
+				messageEvent("user/message", "prompt three"),
+				messageEvent("assistant/message", "answer three"),
 			],
 		});
 
 		const transcript = await convertSessionTranscript(store, "session-primary");
 
-		expect(transcript.primary.lines).toHaveLength(TRANSCRIPT_WINDOW_LINES);
-		// The window is the tail: the last 100 lines, in order.
-		expect(transcript.primary.lines[0]).toEqual({
-			text: "line-50",
-			role: "output",
-		});
-		expect(transcript.primary.lines.at(-1)).toEqual({
-			text: `line-${TRANSCRIPT_WINDOW_LINES + 49}`,
-			role: "output",
-		});
-		// More lines exist before the window, so the page can offer "load more".
+		// The newest pair only: prompt three + answer three.
+		expect(transcript.primary.lines).toEqual([
+			{ text: "prompt three", role: "input" },
+			{ text: "answer three", role: "output" },
+		]);
+		// More pairs exist before the window, so the page can offer "load more".
 		expect(transcript.moreBefore).toBe(true);
 	});
 
-	it("grows the window backward by the requested limit (load more)", async () => {
-		const longLines = Array.from(
-			{ length: TRANSCRIPT_WINDOW_LINES + 150 },
-			(_, i) => `line-${i}`,
-		);
+	it("grows the window backward by the requested pair limit (load more)", async () => {
+		// Three pairs, request the last two.
 		const { store } = fakeTranscriptStore({
 			"session-primary": [
-				messageEvent("assistant/message", longLines.join("\n")),
+				messageEvent("user/message", "prompt one"),
+				messageEvent("assistant/message", "answer one"),
+				messageEvent("user/message", "prompt two"),
+				messageEvent("assistant/message", "answer two"),
+				messageEvent("user/message", "prompt three"),
+				messageEvent("assistant/message", "answer three"),
 			],
 		});
 
-		// One page more: the last 200 lines of the 250 stored.
 		const transcript = await convertSessionTranscript(
 			store,
 			"session-primary",
 			[],
-			TRANSCRIPT_WINDOW_LINES * 2,
+			TRANSCRIPT_WINDOW_PAIRS + 1,
 		);
 
-		expect(transcript.primary.lines).toHaveLength(TRANSCRIPT_WINDOW_LINES * 2);
-		expect(transcript.primary.lines[0]).toEqual({
-			text: "line-50",
-			role: "output",
-		});
-		expect(transcript.primary.lines.at(-1)).toEqual({
-			text: "line-249",
-			role: "output",
-		});
-		// 250 stored lines > 200 requested: more lines remain before the window.
+		// The last two pairs, in order.
+		expect(transcript.primary.lines).toEqual([
+			{ text: "prompt two", role: "input" },
+			{ text: "answer two", role: "output" },
+			{ text: "prompt three", role: "input" },
+			{ text: "answer three", role: "output" },
+		]);
+		// 3 stored pairs > 2 requested: more pairs remain before the window.
 		expect(transcript.moreBefore).toBe(true);
 	});
 
 	it("reports moreBefore=false when the whole transcript fits the window", async () => {
 		const { store } = fakeTranscriptStore({
 			"session-primary": [
-				messageEvent("assistant/message", "only a few lines"),
+				messageEvent("user/message", "only prompt"),
+				messageEvent("assistant/message", "only answer"),
 			],
 		});
 
 		const transcript = await convertSessionTranscript(store, "session-primary");
 
-		expect(transcript.primary.lines).toHaveLength(1);
+		expect(transcript.primary.lines).toEqual([
+			{ text: "only prompt", role: "input" },
+			{ text: "only answer", role: "output" },
+		]);
 		expect(transcript.moreBefore).toBe(false);
 	});
 

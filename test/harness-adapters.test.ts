@@ -146,7 +146,8 @@ describe("loadTranscriptFromContext spliced-session recovery", () => {
 		]);
 		const ctx = { get: () => splicedStore({ rawContent: raw }) };
 		const load = loadTranscriptFromContext(ctx as never);
-		const transcript = await load("spliced");
+		// Request both pairs: the parent prefix pair and the resumed child pair.
+		const transcript = await load("spliced", 2);
 		// Both the parent prefix and the resumed child stream render.
 		expect(transcript.primary.lines.map((l) => l.text)).toEqual([
 			"parent prompt",

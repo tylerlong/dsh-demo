@@ -7,10 +7,10 @@
  * session's transcript from the server's session endpoints: GET /api/sessions
  * returns the two-level tree (workspaces with their enriched sessions — each
  * carrying a readable label, its creation time, top-3, subagent-filtered),
- * and GET /api/sessions/:id/transcript returns the selected session's
- * recent ~100-line window — primary-only, with per-line roles and (when a run
+ * and GET /api/sessions/:id/transcript returns the selected session's recent
+ * prompt/answer window — primary-only, with per-line roles and (when a run
  * is live) the live lane windows (child #46); an optional ?limit=N grows the
- * primary window to the last N lines for "load more". These thin fetch
+ * primary window to the last N prompt/answer pairs for "load more". These thin fetch
  * wrappers mirror
  * the shapes the server serves (see src/session-tree.ts and
  * src/session-transcript.ts), so the client and the server agree on the
@@ -85,7 +85,7 @@ export interface TranscriptLine {
 export interface TranscriptWindow {
 	/** The session id this window was read from. */
 	readonly sessionId: string;
-	/** The recent ~100-line window of the agent's transcript. */
+	/** The recent prompt/answer window of the agent's transcript. */
 	readonly lines: readonly TranscriptLine[];
 }
 
@@ -100,15 +100,19 @@ export interface SessionTranscript {
 	 */
 	readonly lanes: readonly TranscriptWindow[];
 	/**
-	 * Whether the primary session has more stored lines before the returned
-	 * window. The panel offers "load more" only while this is true; lanes are
-	 * never paginated.
+	 * Whether the primary session has more prompt/answer pairs before the
+	 * returned window. The panel offers "load more" only while this is true;
+	 * lanes are never paginated.
 	 */
 	readonly moreBefore: boolean;
 }
 
-/** The number of lines each "load more" click adds to the transcript window. */
-export const TRANSCRIPT_PAGE_SIZE = 100;
+/**
+ * The number of prompt/answer pairs the default window shows, and by which
+ * each "load more" click grows it. The default is one pair — the most recent
+ * user prompt plus the model's reply — and each load adds the next older pair.
+ */
+export const TRANSCRIPT_LOAD_STEP = 1;
 
 /** Fetch the configured model list and its agreed defaults from /api/models. */
 export async function fetchModels(): Promise<ModelsResponse> {
@@ -130,8 +134,9 @@ export async function fetchSessions(): Promise<SessionTree> {
 
 /**
  * Fetch one session's recent transcript window from the store. `limit` sizes
- * the primary window (the last N lines; undefined = the server's default
- * ~100-line window), so "load more" can grow it backward.
+ * the primary window (the last N prompt/answer pairs; undefined = the server's
+ * default one-pair window), so "load more" can grow it backward one pair at a
+ * time.
  */
 export async function fetchTranscript(
 	sessionId: string,

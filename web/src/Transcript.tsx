@@ -3,21 +3,22 @@
  * child ticket #46 makes the read primary-only with per-line roles; child
  * ticket #47 styles input vs output and shows the live lanes).
  *
- * The session browser's right panel: the selected session's recent ~100-line
- * window read from the shared store — primary-only (child #46): stored
- * subagent children are never read; each line carries a role the page styles,
- * and the two live lane-worker windows of our own in-progress run are supplied
- * on the read and rendered alongside the primary. Output is never assembled
- * from streamed deltas: the panel renders whatever the store read returned, and
- * a session/updated push (or a selection change) triggers a fresh store read.
+ * The session browser's right panel: the selected session's recent
+ * prompt/answer window read from the shared store — primary-only (child #46):
+ * stored subagent children are never read; each line carries a role the page
+ * styles, and the two live lane-worker windows of our own in-progress run are
+ * supplied on the read and rendered alongside the primary. Output is never
+ * assembled from streamed deltas: the panel renders whatever the store read
+ * returned, and a session/updated push (or a selection change) triggers a
+ * fresh store read.
  *
  * Per-line styling: model input (user-role) and model output (assistant-role)
  * each get a distinct background; every other line (tool/step/system) keeps
  * the default panel style — there is no third background.
  *
- * Pagination: while the store read reports more lines before the primary
- * window (moreBefore), a "Load more" button at the top grows the window by
- * one page (the last N+100 lines) via onLoadMore.
+ * Pagination: while the store read reports more prompt/answer pairs before
+ * the primary window (moreBefore), a "Load more" button at the top grows the
+ * window by one pair (the last N+1 pairs) via onLoadMore.
  */
 import type { ReactNode } from "react";
 import type { LaneId } from "../../shared/protocol.ts";
@@ -54,10 +55,10 @@ export interface TranscriptProps {
 	 */
 	readonly runStart?: { sessionId: string; task: string } | undefined;
 	/**
-	 * Grow the primary window by one page (the last N+100 lines). Rendered as
-	 * a "Load more" button at the top of the transcript while the store read
-	 * reports more lines before the current window (moreBefore); absent when
-	 * there is nothing more to load.
+	 * Grow the primary window by one prompt/answer pair (the last N+1 pairs).
+	 * Rendered as a "Load more" button at the top of the transcript while the
+	 * store read reports more pairs before the current window (moreBefore);
+	 * absent when there is nothing more to load.
 	 */
 	readonly onLoadMore?: () => void;
 }
@@ -124,7 +125,7 @@ export function Transcript({
 	// session's store transcript.
 	const isRunSession =
 		runStart !== undefined && runStart.sessionId === sessionId;
-	// "Load more" appears at the top while the store read reports more lines
+	// "Load more" appears at the top while the store read reports more pairs
 	// before the primary window (and the page can actually grow it).
 	const canLoadMore =
 		transcript?.moreBefore === true && onLoadMore !== undefined;

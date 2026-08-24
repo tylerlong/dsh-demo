@@ -71,12 +71,13 @@ export interface ServerOptions {
 		| readonly WorkspaceNode[];
 	/**
 	 * Inject the read-only transcript read (ticket #38, child #46): one
-	 * selected session's recent ~100-line window — primary-only, with per-line
-	 * roles, plus (when our own run is live) the in-memory lane windows (see
-	 * session-transcript.ts). `limit` sizes the primary window (the last N
-	 * lines; undefined = the default window), so the page can grow it backward
-	 * via "load more". Production passes a loader backed by the booted
-	 * context; tests inject a fixed read. Backs GET /api/sessions/:id/transcript.
+	 * selected session's recent prompt/answer window — primary-only, with
+	 * per-line roles, plus (when our own run is live) the in-memory lane
+	 * windows (see session-transcript.ts). `limit` sizes the primary window
+	 * (the last N prompt/answer pairs; undefined = the default one-pair
+	 * window), so the page can grow it backward via "load more". Production
+	 * passes a loader backed by the booted context; tests inject a fixed read.
+	 * Backs GET /api/sessions/:id/transcript.
 	 */
 	readonly loadTranscript: (
 		sessionId: string,
@@ -158,10 +159,10 @@ async function readAsset(file: string): Promise<Buffer | undefined> {
 
 /**
  * Parse the optional ?limit= window size of a transcript request. Returns the
- * requested line count clamped to [1, TRANSCRIPT_WINDOW_LIMIT_MAX], or
- * undefined when absent or malformed (the loader then uses its default
- * window). A non-positive or non-numeric value is treated as absent, never as
- * a zero-line (or negative) window.
+ * requested prompt/answer pair count clamped to [1, TRANSCRIPT_WINDOW_LIMIT_MAX],
+ * or undefined when absent or malformed (the loader then uses its default
+ * one-pair window). A non-positive or non-numeric value is treated as absent,
+ * never as a zero-pair (or negative) window.
  */
 function transcriptLimitFrom(url: string | undefined): number | undefined {
 	const query = url?.split("?", 2)[1];
@@ -479,10 +480,10 @@ async function handleRequest(
 	);
 	if (method === "GET" && transcriptMatch !== null) {
 		// The read-only transcript read for one selected session: the primary
-		// session's own recent ~100-line window (child #46), each line tagged
-		// with its role, with live lane windows supplied when a run is active.
-		// An optional ?limit=N grows the window to the last N lines ("load
-		// more"), clamped to the seam's payload bound.
+		// session's own recent prompt/answer window (child #46), each line
+		// tagged with its role, with live lane windows supplied when a run is
+		// active. An optional ?limit=N grows the window to the last N pairs
+		// ("load more"), clamped to the seam's payload bound.
 		const sessionId = decodeURIComponent(transcriptMatch[1] ?? "");
 		const transcript = await options.loadTranscript(
 			sessionId,

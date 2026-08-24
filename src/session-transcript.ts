@@ -26,11 +26,12 @@
  *    through SessionTranscript.lanes; the seam never reads them from the
  *    store. With no live run, lanes is empty.
  *
- * Pagination: the primary window defaults to the recent ~100-line tail, and
- * the read accepts a larger `limit` (the last N lines) so the page's "load
- * more" can grow the window backward by TRANSCRIPT_WINDOW_LINES at a time.
- * `moreBefore` reports whether lines exist before the returned window, so the
- * page knows when to stop offering more. Lanes are never paginated.
+ * Pagination: the primary window defaults to the recent one prompt/answer
+ * pair (one user prompt plus the model's output that responds to it), and the
+ * read accepts a larger `limit` (the last N pairs) so the page's "load more"
+ * grows the window backward one pair at a time. `moreBefore` reports whether
+ * more pairs exist before the returned window, so the page knows when to stop
+ * offering more. Lanes are never paginated.
  *
  * The read is strictly read-only: it only calls store.inspect(id), never a
  * mutation (no create / append / prepare / resume). Mirroring the
@@ -38,8 +39,8 @@
  * store slice keeps the server testable without the real harness.
  */
 
-/** The number of lines in the recent transcript window. */
-export const TRANSCRIPT_WINDOW_LINES = 100;
+/** The number of prompt/answer pairs in the default transcript window. */
+export const TRANSCRIPT_WINDOW_PAIRS = 1;
 
 /** The largest window a single transcript read may request (payload bound). */
 export const TRANSCRIPT_WINDOW_LIMIT_MAX = 1000;
@@ -63,7 +64,7 @@ export interface TranscriptLine {
 export interface TranscriptWindow {
 	/** The session id this window was read from. */
 	readonly sessionId: string;
-	/** The recent ~100-line window of the agent's transcript. */
+	/** The recent window of the agent's transcript (lines of the shown pairs). */
 	readonly lines: readonly TranscriptLine[];
 }
 
@@ -78,9 +79,9 @@ export interface SessionTranscript {
 	 */
 	readonly lanes: readonly TranscriptWindow[];
 	/**
-	 * Whether the primary session has more stored lines before the returned
-	 * window (the fold found more than `limit` lines). The page offers "load
-	 * more" only while this is true; lanes are never paginated.
+	 * Whether the primary session has more prompt/answer pairs before the
+	 * returned window (the fold found more than `limit` pairs). The page offers
+	 * "load more" only while this is true; lanes are never paginated.
 	 */
 	readonly moreBefore: boolean;
 }
@@ -178,19 +179,87 @@ function eventRole(event: TranscriptEvent): TranscriptRole {
 	}
 }
 
-/** Keep only the recent N-line window (the tail of the transcript). */
-function recentWindow(
-	lines: readonly TranscriptLine[],
+/**
+ * One folded prompt/answer message: its text (undivided) and the role of the
+ * event that produced it. Kept apart from the rendered line list so the
+ * windowing can group whole messages into pairs rather than counting lines.
+ */
+interface TranscriptMessage {
+	readonly role: TranscriptRole;
+	readonly text: string;
+}
+
+/** Fold the events into whole messages (input prompt, output answer). */
+function foldMessages(events: readonly TranscriptEvent[]): TranscriptMessage[] {
+	const messages: TranscriptMessage[] = [];
+	for (const event of events) {
+		const text = eventText(event);
+		if (text === undefined) continue;
+		messages.push({ role: eventRole(event), text });
+	}
+	return messages;
+}
+
+/**
+ * Group messages into prompt/answer pairs: each pair is one user prompt plus
+ * the output(s) that directly answer it, up to (not including) the next
+ * prompt. The newest pair is the last message the session produced.
+ */
+function groupPairs(
+	messages: readonly TranscriptMessage[],
+): readonly (readonly TranscriptMessage[])[] {
+	const pairs: TranscriptMessage[][] = [];
+	for (const message of messages) {
+		if (message.role === "input") {
+			pairs.push([message]);
+		} else {
+			// An output answers the most recent prompt; a session that starts
+			// with an orphan output (no preceding prompt in the fold) is its
+			// own leading pair.
+			const last = pairs[pairs.length - 1];
+			if (last === undefined) {
+				pairs.push([message]);
+			} else {
+				last.push(message);
+			}
+		}
+	}
+	return pairs;
+}
+
+/** Render one pair's messages as role-tagged lines. */
+function linesOfPair(pair: readonly TranscriptMessage[]): TranscriptLine[] {
+	const lines: TranscriptLine[] = [];
+	for (const message of pair) {
+		for (const line of message.text.split("\n")) {
+			lines.push({ text: line, role: message.role });
+		}
+	}
+	return lines;
+}
+
+/** Keep only the recent N-pair window (the tail of the transcript). */
+function recentPairWindow(
+	pairs: readonly (readonly TranscriptMessage[])[],
 	limit: number,
-): readonly TranscriptLine[] {
-	return lines.length <= limit ? lines : lines.slice(lines.length - limit);
+): { lines: TranscriptLine[]; moreBefore: boolean } {
+	if (pairs.length <= limit) {
+		return {
+			lines: pairs.flatMap(linesOfPair),
+			moreBefore: false,
+		};
+	}
+	return {
+		lines: pairs.slice(pairs.length - limit).flatMap(linesOfPair),
+		moreBefore: true,
+	};
 }
 
 /** One session's folded window plus whether more lines exist before it. */
 export interface TranscriptWindowRead {
-	/** The recent N-line window of the session's transcript. */
+	/** The recent N-pair window of the session's transcript. */
 	readonly window: TranscriptWindow;
-	/** Whether the session has more lines before the returned window. */
+	/** Whether the session has more pairs before the returned window. */
 	readonly moreBefore: boolean;
 }
 
@@ -209,26 +278,19 @@ async function windowOf(
  * pure fold `windowOf` applies to a store inspection; harness-adapters reuses
  * it for the spliced-session tolerant decode (child #62), which reads the raw
  * JSONL and recovers a contiguous event stream the strict store read refuses.
- * `limit` sizes the window (default TRANSCRIPT_WINDOW_LINES); `moreBefore`
- * reports whether the session has more lines before the returned window.
+ * `limit` sizes the window (default TRANSCRIPT_WINDOW_PAIRS); `moreBefore`
+ * reports whether the session has more pairs before the returned window.
  */
 export function transcriptWindowFromEvents(
 	sessionId: string,
 	events: readonly TranscriptEvent[],
-	limit: number = TRANSCRIPT_WINDOW_LINES,
+	limit: number = TRANSCRIPT_WINDOW_PAIRS,
 ): TranscriptWindowRead {
-	const lines: TranscriptLine[] = [];
-	for (const event of events) {
-		const text = eventText(event);
-		if (text === undefined) continue;
-		const role = eventRole(event);
-		for (const line of text.split("\n")) {
-			lines.push({ text: line, role });
-		}
-	}
+	const pairs = groupPairs(foldMessages(events));
+	const { lines, moreBefore } = recentPairWindow(pairs, limit);
 	return {
-		window: { sessionId, lines: recentWindow(lines, limit) },
-		moreBefore: lines.length > limit,
+		window: { sessionId, lines },
+		moreBefore,
 	};
 }
 
@@ -240,15 +302,15 @@ export function transcriptWindowFromEvents(
  * this run's children) and carried through SessionTranscript.lanes, so a
  * live run renders alongside the primary without the transcript read ever
  * touching stored subagent history. `limit` sizes the primary window (last N
- * lines; default TRANSCRIPT_WINDOW_LINES) and `moreBefore` reports whether
- * more lines exist before it. Strictly read-only — only store.inspect(),
- * never a mutation.
+ * prompt/answer pairs; default TRANSCRIPT_WINDOW_PAIRS) and `moreBefore`
+ * reports whether more pairs exist before it. Strictly read-only — only
+ * store.inspect(), never a mutation.
  */
 export async function convertSessionTranscript(
 	store: TranscriptStoreLike,
 	sessionId: string,
 	liveLanes: readonly TranscriptWindow[] = [],
-	limit: number = TRANSCRIPT_WINDOW_LINES,
+	limit: number = TRANSCRIPT_WINDOW_PAIRS,
 ): Promise<SessionTranscript> {
 	const primary = await windowOf(store, sessionId, limit);
 	return {

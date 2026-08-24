@@ -223,11 +223,11 @@ describe("session browser", () => {
 		expect(screen.getByTestId("session-row-session-2")).not.toHaveAttribute(
 			"aria-current",
 		);
-		expect(loadTranscript).toHaveBeenNthCalledWith(1, "session-2", 100);
-		expect(loadTranscript).toHaveBeenNthCalledWith(2, "session-3", 100);
+		expect(loadTranscript).toHaveBeenNthCalledWith(1, "session-2", 1);
+		expect(loadTranscript).toHaveBeenNthCalledWith(2, "session-3", 1);
 	});
 
-	it("loads 100 more lines on Load more and resets the window on session change", async () => {
+	it("loads one more pair on Load more and resets the window on session change", async () => {
 		const user = userEvent.setup();
 		const { loadTranscript } = renderApp();
 
@@ -239,19 +239,19 @@ describe("session browser", () => {
 		const loadMore = screen.getByTestId("transcript-load-more");
 		expect(loadMore).toBeInTheDocument();
 
-		// One click grows the requested window by one page (last 200 lines).
+		// One click grows the requested window by one pair (last 2 pairs).
 		await user.click(loadMore);
 		await waitFor(() =>
-			expect(loadTranscript).toHaveBeenNthCalledWith(2, "session-2", 200),
+			expect(loadTranscript).toHaveBeenNthCalledWith(2, "session-2", 2),
 		);
 
-		// Selecting a different session resets the window to the default page,
-		// so the new session never inherits the previous one's pagination.
+		// Selecting a different session resets the window to the default one
+		// pair, so the new session never inherits the previous one's pagination.
 		await user.click(screen.getByTestId("session-row-session-3"));
 		await waitFor(() =>
 			expect(primaryOutput()).toHaveTextContent("other session"),
 		);
-		expect(loadTranscript).toHaveBeenNthCalledWith(3, "session-3", 100);
+		expect(loadTranscript).toHaveBeenNthCalledWith(3, "session-3", 1);
 	});
 
 	it("keeps submit disabled until a session is selected", async () => {
@@ -303,7 +303,7 @@ describe("session browser", () => {
 
 		// The viewed session's store advanced: the transcript is re-read.
 		await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(2));
-		expect(loadTranscript).toHaveBeenNthCalledWith(2, "session-2", 100);
+		expect(loadTranscript).toHaveBeenNthCalledWith(2, "session-2", 1);
 	});
 
 	it("ignores session/updated for a session that is not being viewed", async () => {
@@ -379,7 +379,7 @@ describe("session browser", () => {
 		act(() => socket.open());
 
 		await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(2));
-		expect(loadTranscript).toHaveBeenNthCalledWith(2, "session-2", 100);
+		expect(loadTranscript).toHaveBeenNthCalledWith(2, "session-2", 1);
 	});
 
 	it("starts the task field empty", async () => {
