@@ -161,6 +161,53 @@ test("preselects the latest session and continues it through the run form", asyn
 	expect(errors).toEqual([]);
 });
 
+test("the submitted question shows as the primary input and both lane answers stream in and persist after the run", async ({
+	page,
+}) => {
+	const errors: string[] = [];
+	page.on("pageerror", (err) => errors.push("pageerror: " + err.message));
+
+	await page.goto("/");
+	await expect(page.getByTestId("conn-status")).toHaveText("connected", {
+		timeout: 15_000,
+	});
+
+	// Submit a real question; the primary panel shows it as its input line
+	// (the resumed orchestrator is never driven, so the question lives in the
+	// task, not in the stored primary session — regression: the primary used
+	// to render nothing after a run, and the lane windows showed the injected
+	// workspace context instead of the answers, then vanished at run end).
+	const task = "What is your AI model?";
+	await page.getByLabel("Task").fill(task);
+	await expect(page.getByRole("button", { name: "Submit" })).toBeEnabled();
+	await page.getByRole("button", { name: "Submit" }).click();
+
+	// The task appears as the primary's input line.
+	await expect(page.getByTestId("transcript-primary")).toContainText(task, {
+		timeout: 30_000,
+	});
+
+	// Both lane answers stream in over the socket (lane/worker/delta) and
+	// render as the two worker windows, each with real output.
+	const workers = page.getByTestId("transcript-worker");
+	await expect(workers).toHaveCount(2, { timeout: 60_000 });
+	await expect(workers.nth(0)).not.toBeEmpty();
+	await expect(workers.nth(1)).not.toBeEmpty();
+
+	// Both lanes complete, and the answers persist after the run ends (they
+	// are no longer cleared when the run settles).
+	await expect(page.getByTestId("primary-status")).toContainText("done", {
+		timeout: 120_000,
+	});
+	await expect(page.getByTestId("lane-left-status")).toContainText("done");
+	await expect(page.getByTestId("lane-right-status")).toContainText("done");
+	await expect(page.getByTestId("transcript-worker")).toHaveCount(2);
+	await expect(workers.nth(0)).not.toBeEmpty();
+	await expect(workers.nth(1)).not.toBeEmpty();
+
+	expect(errors).toEqual([]);
+});
+
 test("walking the tree switches the transcript and the watched session", async ({
 	page,
 }) => {

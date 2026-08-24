@@ -74,8 +74,14 @@ export interface UseRunResult {
 	readonly runId: string | undefined;
 	/** Seconds since the run started (frozen at its terminal state). */
 	readonly runElapsed: number;
-	/** Per-lane status chip and elapsed seconds (output comes from the store). */
+	/** Per-lane status chip and elapsed seconds. */
 	readonly lanes: Record<LaneId, LaneRunState>;
+	/**
+	 * The live lane-worker answer text streamed over the socket
+	 * (lane/worker/delta), kept after the run ends so the answers stay
+	 * visible. Empty until a run streams deltas.
+	 */
+	readonly laneTexts: Record<LaneId, string>;
 	/** Whether a run is active: locks the form inputs and arms Cancel. */
 	readonly locked: boolean;
 	/**
@@ -127,6 +133,10 @@ export function useRun({
 		left: idleLane(),
 		right: idleLane(),
 	});
+	const [laneTexts, setLaneTexts] = useState<Record<LaneId, string>>({
+		left: "",
+		right: "",
+	});
 
 	// The socket and the run state live behind refs so the mount-time socket
 	// handlers and the submit/cancel actions always read the current run state
@@ -153,6 +163,7 @@ export function useRun({
 					setRunState("running");
 					setRunElapsed(0);
 					setLanes({ left: idleLane(), right: idleLane() });
+					setLaneTexts({ left: "", right: "" });
 					break;
 				case "run/done":
 					// A clear completion signal: any lane still running is done.
@@ -172,6 +183,16 @@ export function useRun({
 							status: "running",
 							elapsed: 0,
 						},
+					}));
+					break;
+				case "lane/worker/delta":
+					// The live lane-worker answer streams here; accumulate it so
+					// the transcript panel renders it live and keeps it after
+					// the run ends (the store read of the child session shows
+					// only the injected workspace context, not the answer).
+					setLaneTexts((previous) => ({
+						...previous,
+						[event.laneId]: previous[event.laneId] + event.text,
 					}));
 					break;
 				case "lane/worker/done":
@@ -319,6 +340,7 @@ export function useRun({
 		runId,
 		runElapsed,
 		lanes,
+		laneTexts,
 		locked: runState === "running",
 		submit,
 		cancel,

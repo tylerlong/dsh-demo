@@ -232,9 +232,28 @@ describe("useRun run lifecycle", () => {
 		expect(controls().leftStatus).toHaveTextContent(/^running/);
 		expect(controls().rightStatus).toHaveTextContent(/^running/);
 
+		// The live lane answers stream over the socket and render in the
+		// transcript panel (the store read of the child session shows only the
+		// injected workspace context, never the answer).
+		act(() =>
+			socket.emit({ type: "lane/worker/delta", laneId: "left", text: "left answer" }),
+		);
+		act(() =>
+			socket.emit({ type: "lane/worker/delta", laneId: "right", text: "right answer" }),
+		);
+		const streamed = screen.getAllByTestId("transcript-worker");
+		expect(streamed).toHaveLength(2);
+		expect(streamed[0]?.textContent ?? "").toContain("left answer");
+		expect(streamed[1]?.textContent ?? "").toContain("right answer");
+
 		act(() => socket.emit({ type: "lane/worker/done", laneId: "left" }));
 		act(() => socket.emit({ type: "lane/worker/done", laneId: "right" }));
 		act(() => socket.emit({ type: "run/done", runId: "run-1" }));
+
+		// The answers stay visible after the run ends.
+		const after = screen.getAllByTestId("transcript-worker");
+		expect(after).toHaveLength(2);
+		expect(after[0]?.textContent ?? "").toContain("left answer");
 
 		expect(controls().leftStatus).toHaveTextContent(/^done/);
 		expect(controls().rightStatus).toHaveTextContent(/^done/);

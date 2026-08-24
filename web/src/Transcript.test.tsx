@@ -95,6 +95,26 @@ describe("Transcript", () => {
 		);
 	});
 
+	it("renders the submitted task as an input line and the streamed lane answers as output, kept after the run", () => {
+		render(
+			<Transcript
+				sessionId="session-1"
+				transcript={{ primary: { sessionId: "session-1", lines: [] }, lanes: [] }}
+				loading={false}
+				task="what is your ai model?"
+				laneTexts={{ left: "left answer", right: "right answer" }}
+			/>,
+		);
+		// The task shows as the primary's input line.
+		const primary = screen.getByTestId("transcript-primary");
+		expect(primary).toHaveTextContent("what is your ai model?");
+		// The streamed lane answers render as the two lane windows.
+		const workers = screen.getAllByTestId("transcript-worker");
+		expect(workers).toHaveLength(2);
+		expect(workers[0]?.textContent ?? "").toContain("left answer");
+		expect(workers[1]?.textContent ?? "").toContain("right answer");
+	});
+
 	it("renders the pre-selection invite and the empty transcript hint", () => {
 		const { unmount } = render(
 			<Transcript sessionId={undefined} transcript={undefined} loading={false} />,
