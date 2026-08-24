@@ -19,11 +19,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { RunEvent, RunRequest } from "../../shared/protocol.ts";
 import { App } from "./App.tsx";
-import type {
-	ModelsResponse,
-	SessionTranscript,
-	SessionTree,
-} from "./api.ts";
+import type { ModelsResponse, SessionTranscript, SessionTree } from "./api.ts";
 
 const MODELS: ModelsResponse = {
 	models: [
@@ -54,12 +50,12 @@ const SESSION_TREE: SessionTree = [
 			{
 				id: "session-1",
 				label: "Refactor the seam",
-				createdAt: 1700000000000,
+				updatedAt: 1700000000000,
 			},
 			{
 				id: "session-2",
 				label: "Wire the run",
-				createdAt: 1700000500000,
+				updatedAt: 1700000500000,
 			},
 		],
 	},
@@ -236,10 +232,18 @@ describe("useRun run lifecycle", () => {
 		// transcript panel (the store read of the child session shows only the
 		// injected workspace context, never the answer).
 		act(() =>
-			socket.emit({ type: "lane/worker/delta", laneId: "left", text: "left answer" }),
+			socket.emit({
+				type: "lane/worker/delta",
+				laneId: "left",
+				text: "left answer",
+			}),
 		);
 		act(() =>
-			socket.emit({ type: "lane/worker/delta", laneId: "right", text: "right answer" }),
+			socket.emit({
+				type: "lane/worker/delta",
+				laneId: "right",
+				text: "right answer",
+			}),
 		);
 		const streamed = screen.getAllByTestId("transcript-worker");
 		expect(streamed).toHaveLength(2);
@@ -275,7 +279,11 @@ describe("useRun run lifecycle", () => {
 		await user.click(controls().submit);
 		act(() => socket.emit({ type: "run/started", runId: "run-1" }));
 		act(() =>
-			socket.emit({ type: "lane/worker/delta", laneId: "left", text: "old answer" }),
+			socket.emit({
+				type: "lane/worker/delta",
+				laneId: "left",
+				text: "old answer",
+			}),
 		);
 		act(() => socket.emit({ type: "lane/worker/done", laneId: "left" }));
 		act(() => socket.emit({ type: "lane/worker/done", laneId: "right" }));

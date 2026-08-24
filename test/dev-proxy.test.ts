@@ -59,13 +59,14 @@ const SESSIONS: WorkspaceNode[] = [
 		id: "ws-alpha",
 		path: "/opt/alpha-project",
 		title: "Alpha",
-		sessions: [{ id: "session-1", label: "Alpha primary", createdAt: 1700000000000 }],
+		sessions: [
+			{ id: "session-1", label: "Alpha primary", updatedAt: 1700000000000 },
+		],
 	},
 ];
 
 /** The frontend source root the dev server serves (web/). */
 const WEB_ROOT = fileURLToPath(new URL("../web", import.meta.url));
-
 
 let backend: ServerHandle;
 let vite: ViteDevServer;

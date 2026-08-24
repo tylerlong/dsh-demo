@@ -39,6 +39,7 @@ const SIDEBAR_WIDTH_KEY = "harness-workflow.sidebarWidth";
 function clampSidebarWidth(width: number): number {
 	return Math.min(SIDEBAR_WIDTH_MAX, Math.max(SIDEBAR_WIDTH_MIN, width));
 }
+
 import { type RunState, useRun } from "./useRun.ts";
 
 export interface AppProps {
@@ -71,10 +72,10 @@ function runStatusText(runState: RunState, elapsed: number): string {
 
 /** The latest session across the whole tree (the preselect rule). */
 function latestSessionId(tree: SessionTree): string | undefined {
-	let latest: { id: string; createdAt: number } | undefined;
+	let latest: { id: string; updatedAt: number } | undefined;
 	for (const workspace of tree) {
 		for (const session of workspace.sessions) {
-			if (latest === undefined || session.createdAt > latest.createdAt) {
+			if (latest === undefined || session.updatedAt > latest.updatedAt) {
 				latest = session;
 			}
 		}
@@ -92,9 +93,9 @@ export function App({
 	const [selectedSessionId, setSelectedSessionId] = useState<
 		string | undefined
 	>(undefined);
-	const [transcript, setTranscript] = useState<
-		SessionTranscript | undefined
-	>(undefined);
+	const [transcript, setTranscript] = useState<SessionTranscript | undefined>(
+		undefined,
+	);
 	const [transcriptLoading, setTranscriptLoading] = useState(false);
 	const [refreshKey, setRefreshKey] = useState(0);
 	// The most recent run that actually began, bound to its session: the
@@ -113,12 +114,17 @@ export function App({
 	// The resizable left-panel width (px). Defaults to w-72 (288px); persisted
 	// to localStorage so the preference survives reloads.
 	const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
-		const stored = Number.parseInt(localStorage.getItem(SIDEBAR_WIDTH_KEY) ?? "", 10);
+		const stored = Number.parseInt(
+			localStorage.getItem(SIDEBAR_WIDTH_KEY) ?? "",
+			10,
+		);
 		return Number.isFinite(stored) ? stored : SIDEBAR_WIDTH_DEFAULT;
 	});
 	// Drag state for the resize handle: the pointer id and the width at drag
 	// start, so the divider walks the panel under a press-drag.
-	const dragRef = useRef<{ pointerId: number; startX: number; startWidth: number } | undefined>(undefined);
+	const dragRef = useRef<
+		{ pointerId: number; startX: number; startWidth: number } | undefined
+	>(undefined);
 
 	const startSidebarDrag = (pointerId: number, clientX: number): void => {
 		dragRef.current = { pointerId, startX: clientX, startWidth: sidebarWidth };
@@ -293,54 +299,57 @@ export function App({
 				/>
 				<div className="flex min-w-0 flex-1 justify-center">
 					<div className="flex w-full max-w-5xl flex-col gap-6 px-6 py-6">
-					<RunConfigForm
-						loadModels={loadModels}
-						sessionId={selectedSessionId}
-						locked={run.locked}
-						onSubmit={(request) => {
-							// Record the run only when the request was actually
-							// sent (submit is a no-op while disconnected or a
-							// run is active).
-							if (run.submit(request)) {
-								setRunStart({ sessionId: request.sessionId, task: request.task });
-							}
-						}}
-						onCancel={run.cancel}
-					/>
-					<Transcript
-						sessionId={selectedSessionId}
-						transcript={transcript}
-						loading={transcriptLoading}
-						laneTexts={run.laneTexts}
-						runStart={runStart}
-					/>
-					<section
-						aria-label="Run"
-						className="flex flex-col gap-2 rounded-lg border border-slate-200 bg-white p-4"
-					>
-						<div className="flex items-center justify-between">
-							<h2 className="text-sm font-semibold">Run</h2>
-							<span
-								data-testid="primary-status"
-								className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700"
-							>
-								{runStatusText(run.runState, run.runElapsed)}
-							</span>
-						</div>
-						<div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-							<Lane
-								laneId="left"
-								heading="Left lane"
-								status={run.lanes.left.status}
-								elapsed={run.lanes.left.elapsed}
-							/>
-							<Lane
-								laneId="right"
-								heading="Right lane"
-								status={run.lanes.right.status}
-								elapsed={run.lanes.right.elapsed}
-							/>
-						</div>
+						<RunConfigForm
+							loadModels={loadModels}
+							sessionId={selectedSessionId}
+							locked={run.locked}
+							onSubmit={(request) => {
+								// Record the run only when the request was actually
+								// sent (submit is a no-op while disconnected or a
+								// run is active).
+								if (run.submit(request)) {
+									setRunStart({
+										sessionId: request.sessionId,
+										task: request.task,
+									});
+								}
+							}}
+							onCancel={run.cancel}
+						/>
+						<Transcript
+							sessionId={selectedSessionId}
+							transcript={transcript}
+							loading={transcriptLoading}
+							laneTexts={run.laneTexts}
+							runStart={runStart}
+						/>
+						<section
+							aria-label="Run"
+							className="flex flex-col gap-2 rounded-lg border border-slate-200 bg-white p-4"
+						>
+							<div className="flex items-center justify-between">
+								<h2 className="text-sm font-semibold">Run</h2>
+								<span
+									data-testid="primary-status"
+									className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700"
+								>
+									{runStatusText(run.runState, run.runElapsed)}
+								</span>
+							</div>
+							<div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+								<Lane
+									laneId="left"
+									heading="Left lane"
+									status={run.lanes.left.status}
+									elapsed={run.lanes.left.elapsed}
+								/>
+								<Lane
+									laneId="right"
+									heading="Right lane"
+									status={run.lanes.right.status}
+									elapsed={run.lanes.right.elapsed}
+								/>
+							</div>
 						</section>
 					</div>
 				</div>

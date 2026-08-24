@@ -57,8 +57,8 @@ const SESSIONS: WorkspaceNode[] = [
 		path: "/opt/alpha-project",
 		title: "Alpha",
 		sessions: [
-			{ id: "session-1", label: "Alpha primary", createdAt: 1700000000000 },
-			{ id: "session-2", label: "Comparisons", createdAt: 1700000500000 },
+			{ id: "session-1", label: "Alpha primary", updatedAt: 1700000000000 },
+			{ id: "session-2", label: "Comparisons", updatedAt: 1700000500000 },
 		],
 	},
 	{
@@ -66,7 +66,7 @@ const SESSIONS: WorkspaceNode[] = [
 		path: "/opt/beta-project",
 		title: "Beta",
 		sessions: [
-			{ id: "session-3", label: "Untitled session", createdAt: 1700001000000 },
+			{ id: "session-3", label: "Untitled session", updatedAt: 1700001000000 },
 		],
 	},
 ];

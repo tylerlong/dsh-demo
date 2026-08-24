@@ -28,10 +28,10 @@
  */
 import type { Context } from "@deepseek-ai/cordis";
 import type { LlmRuntime } from "@deepseek-ai/dsh-llm";
+import { liveLanesFor } from "./live-lanes.ts";
 import type { ModelOption } from "./model-list.ts";
 import { convertLlmModels } from "./model-list.ts";
 import type { SessionTranscript } from "./session-transcript.ts";
-import { liveLanesFor } from "./live-lanes.ts";
 import {
 	convertSessionTranscript,
 	type TranscriptStoreLike,
@@ -53,8 +53,10 @@ function service<T>(ctx: Context, name: string): T {
 	return ctx.get(name) as T;
 }
 
-/** The narrow slice of the shared session store this loader needs: header
- * listing with each session's id, createdAt, and origin marker. */
+/** The narrow slice of the shared session store this loader needs: a header
+ * listing with each session id, createdAt, and origin marker, plus the
+ * per-session event read the recency fold needs (matching DSH web, which
+ * derives updatedAt and blank from each session events). */
 export interface SessionPersistenceLike {
 	list(): Promise<
 		readonly {
@@ -63,15 +65,57 @@ export interface SessionPersistenceLike {
 			readonly origin?: "subagent";
 		}[]
 	>;
+	/** Read one session committed event log (the fold in the loader uses it). */
+	inspect(id: string): Promise<{
+		readonly meta: { readonly id: string };
+		readonly events: readonly {
+			readonly type: string;
+			readonly time: number;
+			readonly data: unknown;
+		}[];
+	}>;
+}
+
+/** Narrow an unknown value to a plain record, or undefined otherwise. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
 }
 
 /**
- * The narrow slice of the mounted session-query service the tree label read
- * needs: fold the stored title for each requested session id (live or
- * persisted), returning one per id. Failures stay per-session, so a session
- * with no readable title resolves absent and the tree falls back to the
- * placeholder.
+ * Fold one session events into the two list facts DSH web derives from them
+ * (api-proxy applySessionListMetadata / sessionListMetadata):
+ *   - blank: no turn ever started (a turn/start event flips it false);
+ *   - lastPromptAt: the time of the last user-origin user/message.
+ * updatedAt is then max(createdAt, lastPromptAt). Mirrors DSH web so the
+ * tree matches its grouped Updated view.
  */
+function sessionListFold(
+	session: { readonly createdAt: number },
+	events: readonly {
+		readonly type: string;
+		readonly time: number;
+		readonly data: unknown;
+	}[],
+): { readonly blank: boolean; readonly updatedAt: number } {
+	let blank = true;
+	let lastPromptAt = 0;
+	for (const event of events) {
+		if (event.type === "turn/start") {
+			blank = false;
+			continue;
+		}
+		if (
+			event.type === "user/message" &&
+			isRecord(event.data) &&
+			isRecord(event.data.source) &&
+			event.data.source.kind === "user"
+		) {
+			lastPromptAt = event.time;
+		}
+	}
+	return { blank, updatedAt: Math.max(session.createdAt, lastPromptAt) };
+}
+
 export interface SessionQueryLike {
 	readTitleSnapshots(sessionIds: readonly string[]): Promise<
 		readonly (
@@ -141,19 +185,48 @@ export function loadSessionsFromContext(
 	const query: SessionQueryLike | undefined = service(ctx, "sessionQuery");
 	const sessions: SessionStoreLike = {
 		async list() {
-			const headers = await persistence.list();
+			// Only the sessions the registry lists can ever appear in the tree (the
+			// tree iterates workspace.sessionIds), so fold + title-read just those —
+			// never the whole persisted corpus, which is far larger.
+			const registryIds = new Set(
+				registry.list().flatMap((workspace) => workspace.sessionIds),
+			);
+			const headers = (await persistence.list()).filter((header) =>
+				registryIds.has(header.id),
+			);
+			// Recency + blank fold: read each session events (matching DSH web
+			// sessionListMetadata) and derive updatedAt = max(createdAt, lastPromptAt).
+			const folds = await Promise.all(
+				headers.map(async (h) => {
+					try {
+						const inspection = await persistence.inspect(h.id);
+						const fold = sessionListFold(h, inspection.events);
+						return { id: h.id, ...fold };
+					} catch {
+						// An unreadable session has no events to fold: treat as
+						// non-blank with updatedAt = createdAt rather than drop it.
+						return { id: h.id, blank: false, updatedAt: h.createdAt };
+					}
+				}),
+			);
+			const foldById = new Map(folds.map((fold) => [fold.id, fold]));
 			const labels =
 				query === undefined
 					? new Map<string, string>()
 					: labelsFromTitles(
 							await query.readTitleSnapshots(headers.map((h) => h.id)),
 						);
-			return headers.map((header) => ({
-				id: header.id,
-				createdAt: header.createdAt,
-				origin: header.origin,
-				label: labels.get(header.id),
-			}));
+			return headers.map((header) => {
+				const fold = foldById.get(header.id);
+				return {
+					id: header.id,
+					createdAt: header.createdAt,
+					updatedAt: fold?.updatedAt ?? header.createdAt,
+					blank: fold?.blank ?? false,
+					origin: header.origin,
+					label: labels.get(header.id),
+				};
+			});
 		},
 	};
 	return () =>
@@ -193,7 +266,10 @@ export function loadTranscriptFromContext(
 						store,
 						ref.workerSessionId,
 					);
-					return { sessionId: ref.workerSessionId, lines: window.primary.lines };
+					return {
+						sessionId: ref.workerSessionId,
+						lines: window.primary.lines,
+					};
 				}),
 			);
 			return await convertSessionTranscript(store, sessionId, liveLanes);

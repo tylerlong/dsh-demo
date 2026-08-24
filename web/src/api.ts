@@ -49,8 +49,8 @@ export interface SessionRow {
 	readonly id: string;
 	/** The session's readable label: stored title, else a placeholder. */
 	readonly label: string;
-	/** Unix epoch milliseconds when the session was created. */
-	readonly createdAt: number;
+	/** Unix epoch ms of last activity (max(createdAt, last user prompt)), matching DSH web updatedAt. */
+	readonly updatedAt: number;
 }
 
 /** One workspace node in the two-level tree (mirror of WorkspaceNode). */

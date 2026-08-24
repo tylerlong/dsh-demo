@@ -27,12 +27,12 @@ const TREE: SessionTreeData = [
 			{
 				id: "session-1",
 				label: "Refactor the seam",
-				createdAt: 1700000000000,
+				updatedAt: 1700000000000,
 			},
 			{
 				id: "session-2",
 				label: "Untitled session",
-				createdAt: 1700000500000,
+				updatedAt: 1700000500000,
 			},
 		],
 	},
@@ -40,7 +40,9 @@ const TREE: SessionTreeData = [
 		id: "ws-beta",
 		path: "/opt/beta-project",
 		title: "Beta",
-		sessions: [{ id: "session-3", label: "Wire the run", createdAt: 1700001000000 }],
+		sessions: [
+			{ id: "session-3", label: "Wire the run", updatedAt: 1700001000000 },
+		],
 	},
 ];
 
@@ -56,9 +58,7 @@ describe("SessionTree", () => {
 		);
 
 		// Both workspaces are present and expanded by default.
-		expect(
-			screen.getByRole("button", { name: /Alpha/ }),
-		).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /Alpha/ })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: /Beta/ })).toBeInTheDocument();
 		expect(screen.getByTestId("session-row-session-1")).toBeInTheDocument();
 		expect(screen.getByTestId("session-row-session-2")).toBeInTheDocument();
@@ -114,9 +114,10 @@ describe("SessionTree", () => {
 		const selected = screen.getByTestId("session-row-session-2");
 		expect(selected).toHaveAttribute("aria-selected", "true");
 		expect(selected).toHaveClass("bg-blue-100");
-		expect(
-			screen.getByTestId("session-row-session-1"),
-		).toHaveAttribute("aria-selected", "false");
+		expect(screen.getByTestId("session-row-session-1")).toHaveAttribute(
+			"aria-selected",
+			"false",
+		);
 	});
 
 	it("shows an empty-catalog hint when the tree has no workspaces", () => {

@@ -19,11 +19,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { RunEvent } from "../../shared/protocol.ts";
 import { App } from "./App.tsx";
-import type {
-	ModelsResponse,
-	SessionTranscript,
-	SessionTree,
-} from "./api.ts";
+import type { ModelsResponse, SessionTranscript, SessionTree } from "./api.ts";
 
 const MODELS: ModelsResponse = {
 	models: [
@@ -55,12 +51,12 @@ const SESSION_TREE: SessionTree = [
 			{
 				id: "session-1",
 				label: "Refactor the seam",
-				createdAt: 1700000000000,
+				updatedAt: 1700000000000,
 			},
 			{
 				id: "session-2",
 				label: "Wire the run",
-				createdAt: 1700000500000,
+				updatedAt: 1700000500000,
 			},
 		],
 	},
@@ -72,7 +68,7 @@ const SESSION_TREE: SessionTree = [
 			{
 				id: "session-3",
 				label: "Untitled session",
-				createdAt: 1700000200000,
+				updatedAt: 1700000200000,
 			},
 		],
 	},
@@ -131,9 +127,9 @@ class FakeWebSocket {
 }
 
 /** Render the app with scripted loaders; returns the socket and the loaders. */
-function renderApp(overrides: {
-	readonly loadSessions?: () => Promise<SessionTree>;
-} = {}) {
+function renderApp(
+	overrides: { readonly loadSessions?: () => Promise<SessionTree> } = {},
+) {
 	const socket = new FakeWebSocket();
 	const loadSessions = vi.fn(
 		overrides.loadSessions ?? (async () => SESSION_TREE),
@@ -255,9 +251,9 @@ describe("session browser", () => {
 		await waitFor(() =>
 			expect(primaryOutput()).toHaveTextContent("primary output"),
 		);
-		expect(
-			screen.getByTestId("transcript-session"),
-		).toHaveTextContent("session-2");
+		expect(screen.getByTestId("transcript-session")).toHaveTextContent(
+			"session-2",
+		);
 
 		// A lane lifecycle event changes the status chip, not the transcript.
 		act(() => socket.open());
@@ -338,7 +334,9 @@ describe("session browser", () => {
 
 		// The fresh read lands and the window updates in place.
 		act(() => resolveRefresh(TRANSCRIPT_2));
-		await waitFor(() => expect(primaryOutput()).toHaveTextContent("primary output"));
+		await waitFor(() =>
+			expect(primaryOutput()).toHaveTextContent("primary output"),
+		);
 	});
 
 	it("re-reads the viewed transcript after a socket reconnect", async () => {
