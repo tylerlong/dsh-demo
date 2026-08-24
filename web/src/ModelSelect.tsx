@@ -43,7 +43,7 @@ export function ModelSelect({
 				value={value}
 				disabled={disabled}
 				onChange={(event) => onChange(event.target.value)}
-				className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+				className="cursor-pointer rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm disabled:cursor-not-allowed disabled:opacity-50"
 			>
 				{models.map((model) => (
 					<option key={model.id} value={model.id}>

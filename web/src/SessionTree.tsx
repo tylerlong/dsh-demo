@@ -44,10 +44,7 @@ export function SessionTree({
 	};
 
 	return (
-		<nav
-			aria-label="Sessions"
-			className="flex flex-col gap-2 rounded-lg border border-slate-200 bg-white p-4"
-		>
+		<nav aria-label="Sessions" className="flex flex-col gap-2">
 			<h2 className="text-sm font-semibold">Sessions</h2>
 			{tree.length === 0 && (
 				<div className="text-xs text-gray-500">
@@ -63,7 +60,7 @@ export function SessionTree({
 							type="button"
 							aria-expanded={!isCollapsed}
 							onClick={() => toggle(workspace.id)}
-							className="flex items-center gap-1 rounded-md px-1 py-1 text-left text-sm font-medium text-slate-800 hover:bg-slate-100"
+							className="cursor-pointer flex items-center gap-1 rounded-md px-1 py-1 text-left text-sm font-medium text-slate-800 transition-colors hover:bg-slate-100 active:bg-slate-200"
 						>
 							<span className="w-3 text-slate-400">
 								{isCollapsed ? "▸" : "▾"}
@@ -85,10 +82,10 @@ export function SessionTree({
 												aria-selected={selected}
 												onClick={() => onSelect(session.id)}
 												className={
-													"w-full truncate rounded-md px-2 py-1 text-left font-mono text-xs " +
+													"w-full cursor-pointer truncate rounded-md px-2 py-1 text-left font-mono text-xs transition-colors " +
 													(selected
 														? "bg-blue-100 font-semibold text-blue-800"
-														: "text-slate-600 hover:bg-slate-100")
+														: "text-slate-600 hover:bg-slate-100 active:bg-slate-200")
 												}
 											>
 												<span className="truncate">{session.label}</span>

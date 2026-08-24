@@ -28,6 +28,17 @@ import { Lane } from "./Lane.tsx";
 import { RunConfigForm, type RunConfigFormProps } from "./RunConfigForm.tsx";
 import { SessionTree as SessionTreePanel } from "./SessionTree.tsx";
 import { Transcript } from "./Transcript.tsx";
+
+// Resizable left-panel bounds and the localStorage key (default = w-72, 288px).
+const SIDEBAR_WIDTH_DEFAULT = 288;
+const SIDEBAR_WIDTH_MIN = 200;
+const SIDEBAR_WIDTH_MAX = 600;
+const SIDEBAR_WIDTH_KEY = "harness-workflow.sidebarWidth";
+
+/** Clamp the left-panel width to its bounds. */
+function clampSidebarWidth(width: number): number {
+	return Math.min(SIDEBAR_WIDTH_MAX, Math.max(SIDEBAR_WIDTH_MIN, width));
+}
 import { type RunState, useRun } from "./useRun.ts";
 
 export interface AppProps {
@@ -98,6 +109,33 @@ export function App({
 	const [transcriptFor, setTranscriptFor] = useState<string | undefined>(
 		undefined,
 	);
+
+	// The resizable left-panel width (px). Defaults to w-72 (288px); persisted
+	// to localStorage so the preference survives reloads.
+	const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+		const stored = Number.parseInt(localStorage.getItem(SIDEBAR_WIDTH_KEY) ?? "", 10);
+		return Number.isFinite(stored) ? stored : SIDEBAR_WIDTH_DEFAULT;
+	});
+	// Drag state for the resize handle: the pointer id and the width at drag
+	// start, so the divider walks the panel under a press-drag.
+	const dragRef = useRef<{ pointerId: number; startX: number; startWidth: number } | undefined>(undefined);
+
+	const startSidebarDrag = (pointerId: number, clientX: number): void => {
+		dragRef.current = { pointerId, startX: clientX, startWidth: sidebarWidth };
+	};
+	// Clamp the drag to sane bounds so the tree never collapses or swallows
+	// the right panel.
+	const updateSidebarDrag = (clientX: number): void => {
+		const drag = dragRef.current;
+		if (drag === undefined) return;
+		const next = clampSidebarWidth(drag.startWidth + (clientX - drag.startX));
+		setSidebarWidth(next);
+	};
+	const endSidebarDrag = (): void => {
+		if (dragRef.current === undefined) return;
+		dragRef.current = undefined;
+		localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth));
+	};
 
 	// The loaders are static seams; refs keep the effects independent of the
 	// props' identities so re-renders never re-fetch.
@@ -209,7 +247,7 @@ export function App({
 	return (
 		<div className="min-h-screen bg-slate-100 text-slate-900">
 			<header className="border-b border-slate-200 bg-white">
-				<div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
+				<div className="flex items-center justify-between px-6 py-4">
 					<h1 className="text-xl font-semibold tracking-tight">
 						harness-workflow
 					</h1>
@@ -224,15 +262,37 @@ export function App({
 					</div>
 				</div>
 			</header>
-			<main className="mx-auto flex max-w-6xl items-start gap-6 px-6 py-6">
-				<aside className="w-72 shrink-0">
+			<main className="flex items-stretch">
+				<aside
+					className="sticky top-0 h-screen shrink-0 overflow-y-auto bg-white p-4"
+					style={{ width: sidebarWidth }}
+				>
 					<SessionTreePanel
 						tree={tree}
 						selectedSessionId={selectedSessionId}
 						onSelect={setSelectedSessionId}
 					/>
 				</aside>
-				<div className="flex min-w-0 flex-1 flex-col gap-6">
+				<div
+					role="separator"
+					aria-orientation="vertical"
+					aria-label="Resize sidebar"
+					aria-valuenow={sidebarWidth}
+					aria-valuemin={SIDEBAR_WIDTH_MIN}
+					aria-valuemax={SIDEBAR_WIDTH_MAX}
+					onPointerDown={(event) => {
+						// Pointer capture keeps the drag alive even if the cursor
+						// leaves the divider mid-drag.
+						event.currentTarget.setPointerCapture(event.pointerId);
+						startSidebarDrag(event.pointerId, event.clientX);
+					}}
+					onPointerMove={(event) => updateSidebarDrag(event.clientX)}
+					onPointerUp={() => endSidebarDrag()}
+					onPointerCancel={() => endSidebarDrag()}
+					className="w-1.5 shrink-0 cursor-col-resize touch-none border-r border-slate-200 hover:border-blue-400"
+				/>
+				<div className="flex min-w-0 flex-1 justify-center">
+					<div className="flex w-full max-w-5xl flex-col gap-6 px-6 py-6">
 					<RunConfigForm
 						loadModels={loadModels}
 						sessionId={selectedSessionId}
@@ -281,7 +341,8 @@ export function App({
 								elapsed={run.lanes.right.elapsed}
 							/>
 						</div>
-					</section>
+						</section>
+					</div>
 				</div>
 			</main>
 		</div>

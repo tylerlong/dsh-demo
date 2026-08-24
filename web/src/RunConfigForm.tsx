@@ -161,7 +161,7 @@ export function RunConfigForm({
 					type="button"
 					disabled={!canSubmit}
 					onClick={handleSubmit}
-					className="rounded-md border border-slate-300 bg-blue-600 px-4 py-2 text-white disabled:cursor-not-allowed disabled:opacity-50"
+					className="cursor-pointer rounded-md border border-slate-300 bg-blue-600 px-4 py-2 text-white transition-colors hover:bg-blue-700 active:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-50"
 				>
 					Submit
 				</button>
@@ -170,7 +170,7 @@ export function RunConfigForm({
 					type="button"
 					disabled={!locked}
 					onClick={onCancel}
-					className="rounded-md border border-slate-300 bg-gray-600 px-4 py-2 text-white disabled:cursor-not-allowed disabled:opacity-50"
+					className="cursor-pointer rounded-md border border-slate-300 bg-gray-600 px-4 py-2 text-white transition-colors hover:bg-gray-700 active:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
 				>
 					Cancel
 				</button>
