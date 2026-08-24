@@ -73,6 +73,141 @@ describe("loadTranscriptFromContext live lanes", () => {
 	});
 });
 
+describe("loadTranscriptFromContext spliced-session recovery", () => {
+	/** A fake store whose inspect refuses the splice and readRaw serves the raw JSONL. */
+	function splicedStore(opts: {
+		rawContent: string;
+		readRawThrows?: boolean;
+		supportsRaw?: boolean;
+	}) {
+		return {
+			supportsRawArtifacts: opts.supportsRaw ?? true,
+			async inspect(_id: string) {
+				throw new Error(
+					"corrupt session log: seq gap in committed region at line 752 (expected 3307, got 3301)",
+				);
+			},
+			async readRaw() {
+				if (opts.readRawThrows) throw new Error("raw read boom");
+				return { content: opts.rawContent, meta: { id: "spliced" } };
+			},
+		};
+	}
+
+	/** One JSONL line: header (line 0) plus event rows. */
+	function jsonl(rows: readonly string[]): string {
+		return ['{"version":1,"id":"spliced"}', ...rows].join("\n") + "\n";
+	}
+
+	it("recovers the committed history when inspect refuses a seq gap at a splice boundary", async () => {
+		const raw = jsonl([
+			// Parent prefix: contiguous seqs 0..3, ending in the splice boundary.
+			JSON.stringify({
+				type: "user/message",
+				seq: 0,
+				time: 1,
+				data: { content: [{ type: "text", text: "parent prompt" }] },
+			}),
+			JSON.stringify({ type: "turn/start", seq: 1, time: 2, data: {} }),
+			JSON.stringify({
+				type: "agent/inbox/spliced",
+				seq: 2,
+				time: 3,
+				data: {},
+			}),
+			JSON.stringify({ type: "session/end-seed", seq: 3, time: 4, data: {} }),
+			// Child stream resumes with its own lower seqs.
+			JSON.stringify({
+				type: "user/message",
+				seq: 0,
+				time: 5,
+				data: { content: [{ type: "text", text: "child prompt" }] },
+			}),
+			JSON.stringify({
+				type: "assistant/message",
+				seq: 1,
+				time: 6,
+				data: {
+					message: { content: [{ type: "text", text: "child answer" }] },
+				},
+			}),
+		]);
+		const ctx = { get: () => splicedStore({ rawContent: raw }) };
+		const load = loadTranscriptFromContext(ctx as never);
+		const transcript = await load("spliced");
+		// Both the parent prefix and the resumed child stream render.
+		expect(transcript.primary.lines.map((l) => l.text)).toEqual([
+			"parent prompt",
+			"child prompt",
+			"child answer",
+		]);
+	});
+
+	it("rejects a genuine forward gap (no splice boundary licenses it)", async () => {
+		const raw = jsonl([
+			JSON.stringify({
+				type: "user/message",
+				seq: 0,
+				time: 1,
+				data: { content: [{ type: "text", text: "a" }] },
+			}),
+			// Forward gap: seq jumps 0 -> 5 with no boundary.
+			JSON.stringify({
+				type: "user/message",
+				seq: 5,
+				time: 2,
+				data: { content: [{ type: "text", text: "b" }] },
+			}),
+		]);
+		const ctx = { get: () => splicedStore({ rawContent: raw }) };
+		const load = loadTranscriptFromContext(ctx as never);
+		const transcript = await load("spliced");
+		// The tolerant decode refuses; the loader falls back to the empty
+		// transcript (the strict read already failed).
+		expect(transcript.primary.lines).toEqual([]);
+	});
+
+	it("rejects a seq restart not licensed by a splice boundary", async () => {
+		const raw = jsonl([
+			JSON.stringify({
+				type: "user/message",
+				seq: 0,
+				time: 1,
+				data: { content: [{ type: "text", text: "a" }] },
+			}),
+			// Regression with no preceding boundary marker.
+			JSON.stringify({
+				type: "user/message",
+				seq: 0,
+				time: 2,
+				data: { content: [{ type: "text", text: "b" }] },
+			}),
+		]);
+		const ctx = { get: () => splicedStore({ rawContent: raw }) };
+		const load = loadTranscriptFromContext(ctx as never);
+		const transcript = await load("spliced");
+		expect(transcript.primary.lines).toEqual([]);
+	});
+
+	it("falls back to the empty transcript when readRaw fails", async () => {
+		const ctx = {
+			get: () => splicedStore({ rawContent: "", readRawThrows: true }),
+		};
+		const load = loadTranscriptFromContext(ctx as never);
+		const transcript = await load("spliced");
+		expect(transcript.primary.lines).toEqual([]);
+	});
+
+	it("skips the tolerant path when the backend has no raw artifacts", async () => {
+		const ctx = {
+			get: () => splicedStore({ rawContent: "", supportsRaw: false }),
+		};
+		const load = loadTranscriptFromContext(ctx as never);
+		const transcript = await load("spliced");
+		expect(transcript.primary.lines).toEqual([]);
+	});
+});
+
 describe("loadSessionsFromContext projection-cache reads", () => {
 	/** A fake context exposing the registry, persistence, cache, and query. */
 	function treeContext(opts: {

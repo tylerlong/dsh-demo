@@ -28,14 +28,17 @@
  */
 import type { Context } from "@deepseek-ai/cordis";
 import type { LlmRuntime } from "@deepseek-ai/dsh-llm";
+import { decodeStorageRecord } from "@deepseek-ai/dsh-session";
 import { liveLanesFor } from "./live-lanes.ts";
 import type { ModelOption } from "./model-list.ts";
 import { convertLlmModels } from "./model-list.ts";
 import type { SessionTranscript } from "./session-transcript.ts";
 import {
 	convertSessionTranscript,
+	type TranscriptEvent,
 	type TranscriptStoreLike,
 	type TranscriptWindow,
+	transcriptWindowFromEvents,
 } from "./session-transcript.ts";
 import type { WorkspaceNode } from "./session-tree.ts";
 import {
@@ -301,10 +304,107 @@ export function loadSessionsFromContext(
 }
 
 /**
+ * The narrow slice of the shared session store the transcript read needs,
+ * extended with the raw-artifact read the spliced-session tolerant decode
+ * (child #62) falls back to. `inspect` is the strict logical read (it refuses
+ * a seq gap at a spliced boundary); `readRaw` returns the verbatim
+ * decompressed JSONL text the tolerant scanner re-parses.
+ */
+export interface TranscriptStoreLikeWithRaw extends TranscriptStoreLike {
+	/** Whether this backend exposes one verbatim raw artifact per session. */
+	readonly supportsRawArtifacts: boolean;
+	/** The session's raw artifact text, or undefined when absent. */
+	readRaw(
+		id: string,
+	): Promise<
+		| { readonly content: string; readonly meta: { readonly id: string } }
+		| undefined
+	>;
+}
+
+/** The strict store read's seq-gap-at-splice refusal, matched by message. */
+function isSeqGapAtSpliceError(error: unknown): boolean {
+	return (
+		error instanceof Error &&
+		error.message.startsWith("corrupt session log: seq gap in committed region")
+	);
+}
+
+/** A raw-log event with the seq the tolerant scanner tracks. */
+interface SeqEvent extends TranscriptEvent {
+	readonly seq: number;
+}
+
+/**
+ * Tolerantly scan one session's raw JSONL text into a contiguous event
+ * stream, mirroring DSH web's own splice handling: a seq restart at an
+ * `agent/inbox/spliced` / `session/end-seed` boundary resumes as a new child
+ * stream (the spliced child's events carry their own lower seqs), while a
+ * genuine missing range (a forward gap with no boundary) is still rejected.
+ * Every line decodes with the same storage-record expansion the strict scan
+ * uses, so chunk rows expand to their per-chunk events. Returns undefined
+ * when the log is not a tolerably-spliced contiguous stream.
+ */
+function tolerantScanRawLog(
+	lines: readonly string[],
+	decode: (value: unknown) => SeqEvent[],
+): SeqEvent[] | undefined {
+	const events: SeqEvent[] = [];
+	let expectedSeq = 0;
+	// The boundary marker that licenses the next seq restart: set when the
+	// previous event was a splice/end-seed boundary, cleared once the child
+	// stream has resumed (the first restarted event consumes it).
+	let spliceBoundary = false;
+	// The first line is the session header (no seq), not an event.
+	for (const line of lines.slice(1)) {
+		if (line.length === 0) continue;
+		let decoded: SeqEvent[];
+		try {
+			decoded = decode(JSON.parse(line));
+		} catch {
+			// An unparsable committed event is corruption, not a splice.
+			return undefined;
+		}
+		for (const event of decoded) {
+			if (event.seq === expectedSeq) {
+				events.push(event);
+				expectedSeq += 1;
+				if (
+					event.type === "agent/inbox/spliced" ||
+					event.type === "session/end-seed"
+				) {
+					spliceBoundary = true;
+				}
+				continue;
+			}
+			// A seq restart is tolerated only immediately after a splice
+			// boundary: the spliced child stream resumes with its own seqs.
+			if (spliceBoundary && event.seq < expectedSeq) {
+				events.push(event);
+				expectedSeq = event.seq + 1;
+				spliceBoundary = false;
+				continue;
+			}
+			// A forward gap (or an unlicensed restart) is a genuine missing
+			// range — reject, never guess.
+			return undefined;
+		}
+	}
+	return events;
+}
+
+/** The tolerant decode's per-line storage-record expansion. */
+function decodeStorageRecordForScan(value: unknown): SeqEvent[] {
+	// `decodeStorageRecord` expands chunk-row-tagged lines into their per-chunk
+	// events; every other line passes through as a single event.
+	return decodeStorageRecord(value) as SeqEvent[];
+}
+/**
  * The /api/sessions/:id/transcript loader supplied from the booted context:
  * the shared session store, pinned to the transcript-read seam shape. Strictly
- * read-only — only `store.inspect()` (child #46: no parentSession listing), never
- * a mutation. A read failure resolves to an empty transcript ([]-equivalent)
+ * read-only — only `store.inspect()` (child #46: no parentSession listing) and,
+ * on a seq-gap-at-splice refusal, the raw-artifact read (child #62), never a
+ * mutation. A read failure resolves to an empty transcript ([]-equivalent)
  * and logs, matching serve.ts today. The two live lane-worker windows of our
  * own in-progress run (registered by the run factory in live-lanes.ts) are
  * read alongside the primary, so a live run renders its two lanes while it
@@ -334,7 +434,44 @@ export function loadTranscriptFromContext(
 					};
 				}),
 			);
-			return await convertSessionTranscript(store, sessionId, liveLanes);
+			try {
+				return await convertSessionTranscript(store, sessionId, liveLanes);
+			} catch (error) {
+				// The strict store read refuses a seq gap at a spliced boundary
+				// (child #62): the subagent-spliced active session's log resumes
+				// the child stream with its own lower seqs. Fall back to the
+				// tolerant decode of the raw JSONL, which keeps the contiguous
+				// parent prefix and resumes after the splice — the same history
+				// DSH web renders.
+				if (isSeqGapAtSpliceError(error)) {
+					const rawStore = store as TranscriptStoreLikeWithRaw;
+					if (rawStore.supportsRawArtifacts) {
+						try {
+							const raw = await rawStore.readRaw(sessionId);
+							if (raw !== undefined) {
+								const events = tolerantScanRawLog(
+									raw.content.split("\n"),
+									decodeStorageRecordForScan,
+								);
+								if (events !== undefined) {
+									return {
+										primary: transcriptWindowFromEvents(sessionId, events),
+										lanes: liveLanes,
+									};
+								}
+							}
+						} catch (rawError) {
+							console.error(
+								`harness-workflow: tolerant decode of session ${sessionId} failed: ${rawError instanceof Error ? rawError.message : rawError}`,
+							);
+						}
+					}
+				}
+				console.error(
+					`harness-workflow: failed to read session ${sessionId} transcript: ${error instanceof Error ? error.message : error}`,
+				);
+				return { primary: { sessionId, lines: [] }, lanes: liveLanes };
+			}
 		} catch (error) {
 			console.error(
 				`harness-workflow: failed to read session ${sessionId} transcript: ${error instanceof Error ? error.message : error}`,

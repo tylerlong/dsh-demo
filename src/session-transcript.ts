@@ -156,8 +156,21 @@ async function windowOf(
 	sessionId: string,
 ): Promise<TranscriptWindow> {
 	const inspection = await store.inspect(sessionId);
+	return transcriptWindowFromEvents(sessionId, inspection.events);
+}
+
+/**
+ * Fold one session's events into its recent transcript window. This is the
+ * pure fold `windowOf` applies to a store inspection; harness-adapters reuses
+ * it for the spliced-session tolerant decode (child #62), which reads the raw
+ * JSONL and recovers a contiguous event stream the strict store read refuses.
+ */
+export function transcriptWindowFromEvents(
+	sessionId: string,
+	events: readonly TranscriptEvent[],
+): TranscriptWindow {
 	const lines: TranscriptLine[] = [];
-	for (const event of inspection.events) {
+	for (const event of events) {
 		const text = eventText(event);
 		if (text === undefined) continue;
 		const role = eventRole(event);
