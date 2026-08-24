@@ -68,7 +68,12 @@ function fakeRegistry(
 
 /** A fake session store recording every call; mutations throw. */
 function fakeStore(
-	headers: readonly { readonly id: string; readonly createdAt: number }[],
+	headers: readonly {
+		readonly id: string;
+		readonly createdAt: number;
+		readonly origin?: "subagent";
+		readonly label?: string;
+	}[],
 ): {
 	readonly calls: readonly string[];
 	readonly store: Parameters<typeof convertSessionTree>[1];
@@ -151,19 +156,13 @@ function fakeTranscriptStore(
 }
 
 describe("session tree seam", () => {
-	it("yields a two-level tree of workspaces with their sessions (id, createdAt)", async () => {
+	it("yields a two-level tree with each session labeled (stored label, else placeholder)", async () => {
 		const { registry } = fakeRegistry([
 			{
 				id: "ws-alpha",
 				path: "/opt/alpha-project",
 				title: "Alpha",
 				sessionIds: ["session-1", "session-2"],
-			},
-			{
-				id: "ws-beta",
-				path: "/opt/beta-project",
-				title: "Beta",
-				sessionIds: ["session-3"],
 			},
 			{
 				id: "ws-empty",
@@ -173,36 +172,91 @@ describe("session tree seam", () => {
 			},
 		]);
 		const { store } = fakeStore([
-			{ id: "session-1", createdAt: 1700000000000 },
+			{ id: "session-1", createdAt: 1700000000000, label: "Alpha primary" },
 			{ id: "session-2", createdAt: 1700000500000 },
-			{ id: "session-3", createdAt: 1700001000000 },
 		]);
 
 		const tree = await convertSessionTree(registry, store);
 
-		expect(tree).toEqual([
+		// A stored label is surfaced; a session without one gets the placeholder.
+		// (Sessions are also ordered newest-first, so session-2 leads.)
+		expect(tree[0]?.sessions).toEqual([
+			{ id: "session-2", label: "Untitled session", createdAt: 1700000500000 },
+			{ id: "session-1", label: "Alpha primary", createdAt: 1700000000000 },
+		]);
+	});
+
+	it("orders sessions newest-first within a workspace and caps at the top 3", async () => {
+		const { registry } = fakeRegistry([
 			{
 				id: "ws-alpha",
 				path: "/opt/alpha-project",
 				title: "Alpha",
-				sessions: [
-					{ id: "session-1", createdAt: 1700000000000 },
-					{ id: "session-2", createdAt: 1700000500000 },
-				],
-			},
-			{
-				id: "ws-beta",
-				path: "/opt/beta-project",
-				title: "Beta",
-				sessions: [{ id: "session-3", createdAt: 1700001000000 }],
-			},
-			{
-				id: "ws-empty",
-				path: "/opt/empty-project",
-				title: "Empty",
-				sessions: [],
+				sessionIds: ["s1", "s2", "s3", "s4", "s5"],
 			},
 		]);
+		const { store } = fakeStore([
+			{ id: "s1", createdAt: 1700000000000 },
+			{ id: "s2", createdAt: 1700000700000 },
+			{ id: "s3", createdAt: 1700000400000 },
+			{ id: "s4", createdAt: 1700000200000 },
+			{ id: "s5", createdAt: 1700000600000 },
+		]);
+
+		const tree = await convertSessionTree(registry, store);
+
+		// Newest first (s2, s5, s3); s4 and s1 (the oldest two) are dropped.
+		expect(tree[0]?.sessions.map((s) => s.id)).toEqual(["s2", "s5", "s3"]);
+	});
+
+	it("filters out subagent sessions (origin: 'subagent'), keeping only top-level conversations", async () => {
+		const { registry } = fakeRegistry([
+			{
+				id: "ws-alpha",
+				path: "/opt/alpha-project",
+				title: "Alpha",
+				sessionIds: ["primary", "lane-left", "lane-right"],
+			},
+		]);
+		const { store } = fakeStore([
+			{ id: "primary", createdAt: 1700000000000, label: "Main" },
+			{
+				id: "lane-left",
+				createdAt: 1700000100000,
+				origin: "subagent",
+				label: "Left lane",
+			},
+			{
+				id: "lane-right",
+				createdAt: 1700000200000,
+				origin: "subagent",
+				label: "Right lane",
+			},
+		]);
+
+		const tree = await convertSessionTree(registry, store);
+
+		// Both lane-worker subagents are filtered; only the top-level survives.
+		expect(tree[0]?.sessions).toEqual([
+			{ id: "primary", label: "Main", createdAt: 1700000000000 },
+		]);
+	});
+
+	it("orders workspaces by their newest session, newest workspace first", async () => {
+		const { registry } = fakeRegistry([
+			{ id: "ws-old", path: "/opt/old", title: "Old", sessionIds: ["s1"] },
+			{ id: "ws-new", path: "/opt/new", title: "New", sessionIds: ["s2"] },
+			{ id: "ws-empty", path: "/opt/empty", title: "Empty", sessionIds: [] },
+		]);
+		const { store } = fakeStore([
+			{ id: "s1", createdAt: 1700000200000 },
+			{ id: "s2", createdAt: 1700000800000 },
+		]);
+
+		const tree = await convertSessionTree(registry, store);
+
+		// ws-new (newest session) first, then ws-old, then the empty workspace.
+		expect(tree.map((w) => w.id)).toEqual(["ws-new", "ws-old", "ws-empty"]);
 	});
 
 	it("omits sessions the registry lists but the store does not know", async () => {
@@ -221,7 +275,7 @@ describe("session tree seam", () => {
 		const tree = await convertSessionTree(registry, store);
 
 		expect(tree[0]?.sessions).toEqual([
-			{ id: "session-1", createdAt: 1700000000000 },
+			{ id: "session-1", label: "Untitled session", createdAt: 1700000000000 },
 		]);
 	});
 

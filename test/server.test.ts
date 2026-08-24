@@ -9,14 +9,7 @@
  */
 import { fileURLToPath } from "node:url";
 import { build } from "vite";
-import {
-	afterEach,
-	beforeAll,
-	describe,
-	expect,
-	it,
-	vi,
-} from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import {
 	createScriptedRunFactory,
@@ -57,22 +50,24 @@ const MODELS: ModelOption[] = [
 	},
 ];
 
-/** Injected fake session-tree rows served over /api/sessions (ticket #38). */
+/** Injected fake session-tree rows served over /api/sessions (ticket #38/44). */
 const SESSIONS: WorkspaceNode[] = [
 	{
 		id: "ws-alpha",
 		path: "/opt/alpha-project",
 		title: "Alpha",
 		sessions: [
-			{ id: "session-1", createdAt: 1700000000000 },
-			{ id: "session-2", createdAt: 1700000500000 },
+			{ id: "session-1", label: "Alpha primary", createdAt: 1700000000000 },
+			{ id: "session-2", label: "Comparisons", createdAt: 1700000500000 },
 		],
 	},
 	{
 		id: "ws-beta",
 		path: "/opt/beta-project",
 		title: "Beta",
-		sessions: [{ id: "session-3", createdAt: 1700001000000 }],
+		sessions: [
+			{ id: "session-3", label: "Untitled session", createdAt: 1700001000000 },
+		],
 	},
 ];
 
@@ -320,7 +315,6 @@ function baseRequest(task: string): RunRequest {
 		sessionId: "session-ws-test",
 	};
 }
-
 
 function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));

@@ -59,7 +59,7 @@ const SESSIONS: WorkspaceNode[] = [
 		id: "ws-alpha",
 		path: "/opt/alpha-project",
 		title: "Alpha",
-		sessions: [{ id: "session-1", createdAt: 1700000000000 }],
+		sessions: [{ id: "session-1", label: "Alpha primary", createdAt: 1700000000000 }],
 	},
 ];
 

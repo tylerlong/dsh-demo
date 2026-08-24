@@ -15,6 +15,12 @@
  *     session-browser seam shapes (`WorkspaceRegistryLike` / `SessionStoreLike`
  *     for the tree, `TranscriptStoreLike` for the transcript read), so the
  *     product path carries no `as unknown as` cast.
+ *   - session labels (ticket #45) come from the store's title read face: the
+ *     unified session-query service (`ctx.sessionQuery`, a base-bundle row
+ *     that stays mounted for exact reads and titles) folds each session's
+ *     stored title, which the tree adapter surfaces as the row's `label`.
+ *     The title projection source is the same `session-title` +
+ *     `session-projection` store harness-workflow already boots.
  *
  * The structural seams are unchanged: server tests inject fake loaders
  * (`loadModels` / `loadSessions` / `loadTranscript`) directly and never reach
@@ -45,6 +51,54 @@ function service<T>(ctx: Context, name: string): T {
 	return ctx.get(name) as T;
 }
 
+/** The narrow slice of the shared session store this loader needs: header
+ * listing with each session's id, createdAt, and origin marker. */
+export interface SessionPersistenceLike {
+	list(): Promise<
+		readonly {
+			readonly id: string;
+			readonly createdAt: number;
+			readonly origin?: "subagent";
+		}[]
+	>;
+}
+
+/**
+ * The narrow slice of the mounted session-query service the tree label read
+ * needs: fold the stored title for each requested session id (live or
+ * persisted), returning one per id. Failures stay per-session, so a session
+ * with no readable title resolves absent and the tree falls back to the
+ * placeholder.
+ */
+export interface SessionQueryLike {
+	readTitleSnapshots(sessionIds: readonly string[]): Promise<
+		readonly (
+			| {
+					readonly sessionId: string;
+					readonly status: "fulfilled";
+					readonly value: { readonly title?: { readonly title: string } };
+			  }
+			| { readonly sessionId: string; readonly status: "rejected" }
+		)[]
+	>;
+}
+
+/** Collect the stored title per session id from a title-snapshot batch. */
+function labelsFromTitles(
+	results: Awaited<ReturnType<SessionQueryLike["readTitleSnapshots"]>>,
+): Map<string, string> {
+	const labels = new Map<string, string>();
+	for (const result of results) {
+		if (result.status === "fulfilled") {
+			const title = result.value.title;
+			if (title !== undefined) {
+				labels.set(result.sessionId, title.title);
+			}
+		}
+	}
+	return labels;
+}
+
 /**
  * The /api/models loader supplied from the booted context: the typed llm
  * registry (an {@link LlmLike}), listed over /api/models. A read failure
@@ -65,16 +119,41 @@ export function loadModelsFromContext(
 
 /**
  * The /api/sessions loader supplied from the booted context: the shared
- * workspace registry and session store (the storage stack boot.ts mounts),
- * pinned to the session-tree seam shapes. Strictly read-only — only
- * `registry.list()` and `sessionPersistence.list()`, never a mutation. A read
- * failure resolves to [] and logs, matching serve.ts today.
+ * workspace registry, session store (the storage stack boot.ts mounts), and
+ * title read face (ctx.sessionQuery), pinned to the session-tree seam shapes.
+ * The store slice the seam consumes enriches each header with the session's
+ * stored `label` from the title read face and its `origin` from the persisted
+ * header, so the seam filters/orders/truncates purely. Strictly read-only —
+ * only `registry.list()`, `sessionPersistence.list()`, and the title read;
+ * never a mutation. A read failure resolves to [] and logs, matching serve.ts
+ * today.
  */
 export function loadSessionsFromContext(
 	ctx: Context,
 ): () => Promise<readonly WorkspaceNode[]> {
 	const registry: WorkspaceRegistryLike = service(ctx, "workspaceRegistry");
-	const sessions: SessionStoreLike = service(ctx, "sessionPersistence");
+	const persistence: SessionPersistenceLike = service(
+		ctx,
+		"sessionPersistence",
+	);
+	const query: SessionQueryLike | undefined = service(ctx, "sessionQuery");
+	const sessions: SessionStoreLike = {
+		async list() {
+			const headers = await persistence.list();
+			const labels =
+				query === undefined
+					? new Map<string, string>()
+					: labelsFromTitles(
+							await query.readTitleSnapshots(headers.map((h) => h.id)),
+						);
+			return headers.map((header) => ({
+				id: header.id,
+				createdAt: header.createdAt,
+				origin: header.origin,
+				label: labels.get(header.id),
+			}));
+		},
+	};
 	return () =>
 		convertSessionTree(registry, sessions).catch((error) => {
 			console.error(
