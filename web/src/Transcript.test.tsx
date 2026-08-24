@@ -11,7 +11,7 @@
  * primary.
  */
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { SessionTranscript } from "./api.ts";
 import { Transcript } from "./Transcript.tsx";
 
@@ -33,6 +33,7 @@ const TRANSCRIPT: SessionTranscript = {
 			],
 		},
 	],
+	moreBefore: false,
 };
 
 function renderTranscript(
@@ -90,6 +91,7 @@ describe("Transcript", () => {
 				lines: [{ text: "only primary", role: "output" }],
 			},
 			lanes: [],
+			moreBefore: false,
 		});
 		expect(screen.queryAllByTestId("transcript-worker")).toHaveLength(0);
 		expect(screen.getByTestId("transcript-primary")).toHaveTextContent(
@@ -104,6 +106,7 @@ describe("Transcript", () => {
 				transcript={{
 					primary: { sessionId: "session-1", lines: [] },
 					lanes: [],
+					moreBefore: false,
 				}}
 				loading={false}
 				runStart={{ sessionId: "session-1", task: "what is your ai model?" }}
@@ -137,6 +140,7 @@ describe("Transcript", () => {
 							],
 						},
 					],
+					moreBefore: false,
 				}}
 				loading={false}
 				runStart={{ sessionId: "session-1", task: "question" }}
@@ -194,6 +198,7 @@ describe("Transcript", () => {
 				transcript={{
 					primary: { sessionId: "session-2", lines: [] },
 					lanes: [],
+					moreBefore: false,
 				}}
 				loading={false}
 				// The run belongs to session-1; session-2 is selected.
@@ -227,5 +232,85 @@ describe("Transcript", () => {
 	it("shows the loading placeholder while a read is in flight", () => {
 		render(<Transcript sessionId="s" transcript={undefined} loading={true} />);
 		expect(screen.getByText(/Loading transcript/)).toBeInTheDocument();
+	});
+
+	it("shows the Load more button at the top only while moreBefore is true", () => {
+		const onLoadMore = vi.fn();
+		const { unmount } = render(
+			<Transcript
+				sessionId="session-1"
+				transcript={{
+					primary: {
+						sessionId: "session-1",
+						lines: [{ text: "newest", role: "output" }],
+					},
+					lanes: [],
+					moreBefore: true,
+				}}
+				loading={false}
+				onLoadMore={onLoadMore}
+			/>,
+		);
+
+		// The button renders above the primary window (the panel header is the
+		// only element above it).
+		const button = screen.getByTestId("transcript-load-more");
+		expect(button).toHaveTextContent("Load more");
+		const header = screen.getByRole("heading", { name: "Transcript" });
+		const primary = screen.getByTestId("transcript-primary");
+		expect(
+			button.compareDocumentPosition(primary) &
+				Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+		expect(
+			header.compareDocumentPosition(button) &
+				Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+
+		// Clicking grows the window via the callback.
+		button.click();
+		expect(onLoadMore).toHaveBeenCalledTimes(1);
+		unmount();
+
+		// No more history before the window: the button is gone.
+		render(
+			<Transcript
+				sessionId="session-1"
+				transcript={{
+					primary: {
+						sessionId: "session-1",
+						lines: [{ text: "only", role: "output" }],
+					},
+					lanes: [],
+					moreBefore: false,
+				}}
+				loading={false}
+				onLoadMore={onLoadMore}
+			/>,
+		);
+		expect(
+			screen.queryByTestId("transcript-load-more"),
+		).not.toBeInTheDocument();
+	});
+
+	it("hides the Load more button when the page cannot grow the window", () => {
+		render(
+			<Transcript
+				sessionId="session-1"
+				transcript={{
+					primary: {
+						sessionId: "session-1",
+						lines: [{ text: "more", role: "output" }],
+					},
+					lanes: [],
+					moreBefore: true,
+				}}
+				loading={false}
+				// No onLoadMore: the button must not appear (nothing would happen).
+			/>,
+		);
+		expect(
+			screen.queryByTestId("transcript-load-more"),
+		).not.toBeInTheDocument();
 	});
 });

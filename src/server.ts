@@ -29,6 +29,7 @@ import type { ModelOption } from "./model-list.ts";
 import { resolveDefaults } from "./model-list.ts";
 import type { RunHandle, StartRun } from "./run-factory.ts";
 import type { SessionTranscript } from "./session-transcript.ts";
+import { TRANSCRIPT_WINDOW_LIMIT_MAX } from "./session-transcript.ts";
 import type { WorkspaceNode } from "./session-tree.ts";
 
 /** Re-export the dropdown option shape the /api/models endpoint serves. */
@@ -72,11 +73,14 @@ export interface ServerOptions {
 	 * Inject the read-only transcript read (ticket #38, child #46): one
 	 * selected session's recent ~100-line window — primary-only, with per-line
 	 * roles, plus (when our own run is live) the in-memory lane windows (see
-	 * session-transcript.ts). Production passes a loader backed by the booted
+	 * session-transcript.ts). `limit` sizes the primary window (the last N
+	 * lines; undefined = the default window), so the page can grow it backward
+	 * via "load more". Production passes a loader backed by the booted
 	 * context; tests inject a fixed read. Backs GET /api/sessions/:id/transcript.
 	 */
 	readonly loadTranscript: (
 		sessionId: string,
+		limit?: number,
 	) => Promise<SessionTranscript> | SessionTranscript;
 	/**
 	 * Inject the run factory (ticket #4): the server's only dependency on
@@ -150,6 +154,26 @@ async function readAsset(file: string): Promise<Buffer | undefined> {
 	} catch {
 		return undefined;
 	}
+}
+
+/**
+ * Parse the optional ?limit= window size of a transcript request. Returns the
+ * requested line count clamped to [1, TRANSCRIPT_WINDOW_LIMIT_MAX], or
+ * undefined when absent or malformed (the loader then uses its default
+ * window). A non-positive or non-numeric value is treated as absent, never as
+ * a zero-line (or negative) window.
+ */
+function transcriptLimitFrom(url: string | undefined): number | undefined {
+	const query = url?.split("?", 2)[1];
+	if (query === undefined) return undefined;
+	for (const pair of query.split("&")) {
+		const [key, value] = pair.split("=", 2);
+		if (key !== "limit") continue;
+		const parsed = Number.parseInt(value ?? "", 10);
+		if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
+		return Math.min(parsed, TRANSCRIPT_WINDOW_LIMIT_MAX);
+	}
+	return undefined;
 }
 
 /**
@@ -457,8 +481,13 @@ async function handleRequest(
 		// The read-only transcript read for one selected session: the primary
 		// session's own recent ~100-line window (child #46), each line tagged
 		// with its role, with live lane windows supplied when a run is active.
+		// An optional ?limit=N grows the window to the last N lines ("load
+		// more"), clamped to the seam's payload bound.
 		const sessionId = decodeURIComponent(transcriptMatch[1] ?? "");
-		const transcript = await options.loadTranscript(sessionId);
+		const transcript = await options.loadTranscript(
+			sessionId,
+			transcriptLimitFrom(req.url),
+		);
 		res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
 		res.end(JSON.stringify(transcript));
 		return;

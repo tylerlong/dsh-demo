@@ -67,6 +67,7 @@ const TRANSCRIPT: SessionTranscript = {
 		lines: [{ text: "primary output", role: "output" }],
 	},
 	lanes: [],
+	moreBefore: false,
 };
 
 /**

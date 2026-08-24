@@ -14,6 +14,10 @@
  * Per-line styling: model input (user-role) and model output (assistant-role)
  * each get a distinct background; every other line (tool/step/system) keeps
  * the default panel style — there is no third background.
+ *
+ * Pagination: while the store read reports more lines before the primary
+ * window (moreBefore), a "Load more" button at the top grows the window by
+ * one page (the last N+100 lines) via onLoadMore.
  */
 import type { ReactNode } from "react";
 import type { LaneId } from "../../shared/protocol.ts";
@@ -49,6 +53,13 @@ export interface TranscriptProps {
 	 * delta arrives.
 	 */
 	readonly runStart?: { sessionId: string; task: string } | undefined;
+	/**
+	 * Grow the primary window by one page (the last N+100 lines). Rendered as
+	 * a "Load more" button at the top of the transcript while the store read
+	 * reports more lines before the current window (moreBefore); absent when
+	 * there is nothing more to load.
+	 */
+	readonly onLoadMore?: () => void;
 }
 
 /** One line's background class for its role (input/output styled; default). */
@@ -106,12 +117,27 @@ export function Transcript({
 	loading,
 	laneTexts,
 	runStart,
+	onLoadMore,
 }: TranscriptProps) {
 	// A run's live content (its task + lane answers) belongs only to the
 	// session it was submitted on; a different selection shows only that
 	// session's store transcript.
 	const isRunSession =
 		runStart !== undefined && runStart.sessionId === sessionId;
+	// "Load more" appears at the top while the store read reports more lines
+	// before the primary window (and the page can actually grow it).
+	const canLoadMore =
+		transcript?.moreBefore === true && onLoadMore !== undefined;
+	const loadMoreButton = canLoadMore ? (
+		<button
+			type="button"
+			data-testid="transcript-load-more"
+			onClick={onLoadMore}
+			className="self-center rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-800"
+		>
+			Load more
+		</button>
+	) : null;
 	// The submitted task of our own run shows as the primary's input line
 	// (the resumed orchestrator session itself is never driven, so the
 	// question lives in the submitted task, not the stored primary window).
@@ -213,6 +239,7 @@ export function Transcript({
 					</span>
 				)}
 			</div>
+			{loadMoreButton}
 			{body}
 		</section>
 	);

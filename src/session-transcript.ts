@@ -26,6 +26,12 @@
  *    through SessionTranscript.lanes; the seam never reads them from the
  *    store. With no live run, lanes is empty.
  *
+ * Pagination: the primary window defaults to the recent ~100-line tail, and
+ * the read accepts a larger `limit` (the last N lines) so the page's "load
+ * more" can grow the window backward by TRANSCRIPT_WINDOW_LINES at a time.
+ * `moreBefore` reports whether lines exist before the returned window, so the
+ * page knows when to stop offering more. Lanes are never paginated.
+ *
  * The read is strictly read-only: it only calls store.inspect(id), never a
  * mutation (no create / append / prepare / resume). Mirroring the
  * WorkspaceRegistryLike / SessionStoreLike pattern, the narrow structural
@@ -34,6 +40,9 @@
 
 /** The number of lines in the recent transcript window. */
 export const TRANSCRIPT_WINDOW_LINES = 100;
+
+/** The largest window a single transcript read may request (payload bound). */
+export const TRANSCRIPT_WINDOW_LIMIT_MAX = 1000;
 
 /**
  * A line's role, so the page can style what was fed to the model vs what it
@@ -68,6 +77,12 @@ export interface SessionTranscript {
 	 * without a live run this is empty.
 	 */
 	readonly lanes: readonly TranscriptWindow[];
+	/**
+	 * Whether the primary session has more stored lines before the returned
+	 * window (the fold found more than `limit` lines). The page offers "load
+	 * more" only while this is true; lanes are never paginated.
+	 */
+	readonly moreBefore: boolean;
 }
 
 /** The minimal session event shape the transcript read consumes. */
@@ -141,22 +156,30 @@ function eventRole(event: TranscriptEvent): TranscriptRole {
 	}
 }
 
-/** Keep only the recent ~100-line window (the tail of the transcript). */
+/** Keep only the recent N-line window (the tail of the transcript). */
 function recentWindow(
 	lines: readonly TranscriptLine[],
+	limit: number,
 ): readonly TranscriptLine[] {
-	return lines.length <= TRANSCRIPT_WINDOW_LINES
-		? lines
-		: lines.slice(lines.length - TRANSCRIPT_WINDOW_LINES);
+	return lines.length <= limit ? lines : lines.slice(lines.length - limit);
+}
+
+/** One session's folded window plus whether more lines exist before it. */
+export interface TranscriptWindowRead {
+	/** The recent N-line window of the session's transcript. */
+	readonly window: TranscriptWindow;
+	/** Whether the session has more lines before the returned window. */
+	readonly moreBefore: boolean;
 }
 
 /** Read one session's recent transcript window from the store. */
 async function windowOf(
 	store: TranscriptStoreLike,
 	sessionId: string,
-): Promise<TranscriptWindow> {
+	limit: number,
+): Promise<TranscriptWindowRead> {
 	const inspection = await store.inspect(sessionId);
-	return transcriptWindowFromEvents(sessionId, inspection.events);
+	return transcriptWindowFromEvents(sessionId, inspection.events, limit);
 }
 
 /**
@@ -164,11 +187,14 @@ async function windowOf(
  * pure fold `windowOf` applies to a store inspection; harness-adapters reuses
  * it for the spliced-session tolerant decode (child #62), which reads the raw
  * JSONL and recovers a contiguous event stream the strict store read refuses.
+ * `limit` sizes the window (default TRANSCRIPT_WINDOW_LINES); `moreBefore`
+ * reports whether the session has more lines before the returned window.
  */
 export function transcriptWindowFromEvents(
 	sessionId: string,
 	events: readonly TranscriptEvent[],
-): TranscriptWindow {
+	limit: number = TRANSCRIPT_WINDOW_LINES,
+): TranscriptWindowRead {
 	const lines: TranscriptLine[] = [];
 	for (const event of events) {
 		const text = eventText(event);
@@ -178,7 +204,10 @@ export function transcriptWindowFromEvents(
 			lines.push({ text: line, role });
 		}
 	}
-	return { sessionId, lines: recentWindow(lines) };
+	return {
+		window: { sessionId, lines: recentWindow(lines, limit) },
+		moreBefore: lines.length > limit,
+	};
 }
 
 /**
@@ -188,16 +217,21 @@ export function transcriptWindowFromEvents(
  * outputs of a live run are supplied separately as liveLanes (in-memory,
  * this run's children) and carried through SessionTranscript.lanes, so a
  * live run renders alongside the primary without the transcript read ever
- * touching stored subagent history. Strictly read-only — only
- * store.inspect(), never a mutation.
+ * touching stored subagent history. `limit` sizes the primary window (last N
+ * lines; default TRANSCRIPT_WINDOW_LINES) and `moreBefore` reports whether
+ * more lines exist before it. Strictly read-only — only store.inspect(),
+ * never a mutation.
  */
 export async function convertSessionTranscript(
 	store: TranscriptStoreLike,
 	sessionId: string,
 	liveLanes: readonly TranscriptWindow[] = [],
+	limit: number = TRANSCRIPT_WINDOW_LINES,
 ): Promise<SessionTranscript> {
+	const primary = await windowOf(store, sessionId, limit);
 	return {
-		primary: await windowOf(store, sessionId),
+		primary: primary.window,
 		lanes: liveLanes,
+		moreBefore: primary.moreBefore,
 	};
 }

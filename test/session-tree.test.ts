@@ -557,6 +557,53 @@ describe("session transcript seam", () => {
 			text: `line-${TRANSCRIPT_WINDOW_LINES + 49}`,
 			role: "output",
 		});
+		// More lines exist before the window, so the page can offer "load more".
+		expect(transcript.moreBefore).toBe(true);
+	});
+
+	it("grows the window backward by the requested limit (load more)", async () => {
+		const longLines = Array.from(
+			{ length: TRANSCRIPT_WINDOW_LINES + 150 },
+			(_, i) => `line-${i}`,
+		);
+		const { store } = fakeTranscriptStore({
+			"session-primary": [
+				messageEvent("assistant/message", longLines.join("\n")),
+			],
+		});
+
+		// One page more: the last 200 lines of the 250 stored.
+		const transcript = await convertSessionTranscript(
+			store,
+			"session-primary",
+			[],
+			TRANSCRIPT_WINDOW_LINES * 2,
+		);
+
+		expect(transcript.primary.lines).toHaveLength(TRANSCRIPT_WINDOW_LINES * 2);
+		expect(transcript.primary.lines[0]).toEqual({
+			text: "line-50",
+			role: "output",
+		});
+		expect(transcript.primary.lines.at(-1)).toEqual({
+			text: "line-249",
+			role: "output",
+		});
+		// 250 stored lines > 200 requested: more lines remain before the window.
+		expect(transcript.moreBefore).toBe(true);
+	});
+
+	it("reports moreBefore=false when the whole transcript fits the window", async () => {
+		const { store } = fakeTranscriptStore({
+			"session-primary": [
+				messageEvent("assistant/message", "only a few lines"),
+			],
+		});
+
+		const transcript = await convertSessionTranscript(store, "session-primary");
+
+		expect(transcript.primary.lines).toHaveLength(1);
+		expect(transcript.moreBefore).toBe(false);
 	});
 
 	it("is strictly read-only: only store.inspect() is called, no list()", async () => {

@@ -90,6 +90,7 @@ const TRANSCRIPT: SessionTranscript = {
 			lines: [{ text: "right answer", role: "output" }],
 		},
 	],
+	moreBefore: false,
 };
 
 /** The frontend source root, whose production build the static-page suite serves. */
@@ -235,12 +236,53 @@ describe("session transcript endpoint", () => {
 			port: 0,
 			loadTranscript: (sessionId) => {
 				requested.push(sessionId);
-				return { primary: { sessionId, lines: [] }, lanes: [] };
+				return {
+					primary: { sessionId, lines: [] },
+					lanes: [],
+					moreBefore: false,
+				};
 			},
 		});
 		const res = await fetch(`${handle.url}/api/sessions/session-42/transcript`);
 		expect(res.status).toBe(200);
 		expect(requested).toEqual(["session-42"]);
+	});
+
+	it("forwards an explicit ?limit= window size to the injected loader", async () => {
+		const limits: Array<number | undefined> = [];
+		const handle = await start({
+			port: 0,
+			loadTranscript: (sessionId, limit) => {
+				limits.push(limit);
+				return {
+					primary: { sessionId, lines: [] },
+					lanes: [],
+					moreBefore: false,
+				};
+			},
+		});
+		await fetch(`${handle.url}/api/sessions/session-1/transcript?limit=200`);
+		await fetch(`${handle.url}/api/sessions/session-1/transcript`);
+		await fetch(`${handle.url}/api/sessions/session-1/transcript?limit=0`);
+		await fetch(`${handle.url}/api/sessions/session-1/transcript?limit=abc`);
+		expect(limits).toEqual([200, undefined, undefined, undefined]);
+	});
+
+	it("clamps an oversized ?limit= to the payload bound", async () => {
+		const limits: Array<number | undefined> = [];
+		const handle = await start({
+			port: 0,
+			loadTranscript: (sessionId, limit) => {
+				limits.push(limit);
+				return {
+					primary: { sessionId, lines: [] },
+					lanes: [],
+					moreBefore: false,
+				};
+			},
+		});
+		await fetch(`${handle.url}/api/sessions/session-1/transcript?limit=999999`);
+		expect(limits).toEqual([1000]);
 	});
 
 	it("404s a malformed transcript route", async () => {

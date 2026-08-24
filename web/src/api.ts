@@ -9,7 +9,9 @@
  * carrying a readable label, its creation time, top-3, subagent-filtered),
  * and GET /api/sessions/:id/transcript returns the selected session's
  * recent ~100-line window — primary-only, with per-line roles and (when a run
- * is live) the live lane windows (child #46). These thin fetch wrappers mirror
+ * is live) the live lane windows (child #46); an optional ?limit=N grows the
+ * primary window to the last N lines for "load more". These thin fetch
+ * wrappers mirror
  * the shapes the server serves (see src/session-tree.ts and
  * src/session-transcript.ts), so the client and the server agree on the
  * session-browser contract. The workspace dropdown is gone (parent #37): the
@@ -97,7 +99,16 @@ export interface SessionTranscript {
 	 * run this is empty.
 	 */
 	readonly lanes: readonly TranscriptWindow[];
+	/**
+	 * Whether the primary session has more stored lines before the returned
+	 * window. The panel offers "load more" only while this is true; lanes are
+	 * never paginated.
+	 */
+	readonly moreBefore: boolean;
 }
+
+/** The number of lines each "load more" click adds to the transcript window. */
+export const TRANSCRIPT_PAGE_SIZE = 100;
 
 /** Fetch the configured model list and its agreed defaults from /api/models. */
 export async function fetchModels(): Promise<ModelsResponse> {
@@ -117,12 +128,18 @@ export async function fetchSessions(): Promise<SessionTree> {
 	return (await res.json()) as SessionTree;
 }
 
-/** Fetch one session's recent transcript window from the store. */
+/**
+ * Fetch one session's recent transcript window from the store. `limit` sizes
+ * the primary window (the last N lines; undefined = the server's default
+ * ~100-line window), so "load more" can grow it backward.
+ */
 export async function fetchTranscript(
 	sessionId: string,
+	limit?: number,
 ): Promise<SessionTranscript> {
+	const query = limit === undefined ? "" : `?limit=${limit}`;
 	const res = await fetch(
-		`/api/sessions/${encodeURIComponent(sessionId)}/transcript`,
+		`/api/sessions/${encodeURIComponent(sessionId)}/transcript${query}`,
 	);
 	if (!res.ok) {
 		throw new Error(

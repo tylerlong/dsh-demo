@@ -414,9 +414,9 @@ function decodeStorageRecordForScan(value: unknown): SeqEvent[] {
  */
 export function loadTranscriptFromContext(
 	ctx: Context,
-): (sessionId: string) => Promise<SessionTranscript> {
+): (sessionId: string, limit?: number) => Promise<SessionTranscript> {
 	const store: TranscriptStoreLike = service(ctx, "sessionPersistence");
-	return async (sessionId) => {
+	return async (sessionId, limit) => {
 		try {
 			// Our own live run's lane-worker children supply the live lanes
 			// (spec #44, User Story 8): read each live worker's store window the
@@ -437,7 +437,12 @@ export function loadTranscriptFromContext(
 				}),
 			);
 			try {
-				return await convertSessionTranscript(store, sessionId, liveLanes);
+				return await convertSessionTranscript(
+					store,
+					sessionId,
+					liveLanes,
+					limit,
+				);
 			} catch (error) {
 				// The strict store read refuses a seq gap at a spliced boundary
 				// (child #62): the subagent-spliced active session's log resumes
@@ -456,9 +461,15 @@ export function loadTranscriptFromContext(
 									decodeStorageRecordForScan,
 								);
 								if (events !== undefined) {
+									const read = transcriptWindowFromEvents(
+										sessionId,
+										events,
+										limit,
+									);
 									return {
-										primary: transcriptWindowFromEvents(sessionId, events),
+										primary: read.window,
 										lanes: liveLanes,
+										moreBefore: read.moreBefore,
 									};
 								}
 							}
@@ -472,13 +483,21 @@ export function loadTranscriptFromContext(
 				console.error(
 					`harness-workflow: failed to read session ${sessionId} transcript: ${error instanceof Error ? error.message : error}`,
 				);
-				return { primary: { sessionId, lines: [] }, lanes: liveLanes };
+				return {
+					primary: { sessionId, lines: [] },
+					lanes: liveLanes,
+					moreBefore: false,
+				};
 			}
 		} catch (error) {
 			console.error(
 				`harness-workflow: failed to read session ${sessionId} transcript: ${error instanceof Error ? error.message : error}`,
 			);
-			return { primary: { sessionId, lines: [] }, lanes: [] };
+			return {
+				primary: { sessionId, lines: [] },
+				lanes: [],
+				moreBefore: false,
+			};
 		}
 	};
 }

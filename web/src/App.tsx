@@ -23,7 +23,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import type { SessionTranscript, SessionTree } from "./api.ts";
-import { fetchSessions, fetchTranscript } from "./api.ts";
+import { fetchSessions, fetchTranscript, TRANSCRIPT_PAGE_SIZE } from "./api.ts";
 import { Lane } from "./Lane.tsx";
 import { RunConfigForm, type RunConfigFormProps } from "./RunConfigForm.tsx";
 import { SessionTree as SessionTreePanel } from "./SessionTree.tsx";
@@ -57,9 +57,14 @@ export interface AppProps {
 	readonly loadSessions?: () => Promise<SessionTree>;
 	/**
 	 * Load one session's transcript from the store; defaults to the
-	 * /api/sessions/:id/transcript fetch. Tests inject a fake.
+	 * /api/sessions/:id/transcript fetch. `limit` sizes the primary window
+	 * (the last N lines), so "load more" grows it backward. Tests inject a
+	 * fake.
 	 */
-	readonly loadTranscript?: (sessionId: string) => Promise<SessionTranscript>;
+	readonly loadTranscript?: (
+		sessionId: string,
+		limit?: number,
+	) => Promise<SessionTranscript>;
 }
 
 /** The run-level status text; idle shows no status at all. */
@@ -98,6 +103,11 @@ export function App({
 	);
 	const [transcriptLoading, setTranscriptLoading] = useState(false);
 	const [refreshKey, setRefreshKey] = useState(0);
+	// The primary window size requested from the store (the last N lines).
+	// "Load more" grows it by TRANSCRIPT_PAGE_SIZE; a session change resets it
+	// to the default window so a new selection never inherits another
+	// session's pagination.
+	const [transcriptLimit, setTranscriptLimit] = useState(TRANSCRIPT_PAGE_SIZE);
 	// The most recent run that actually began, bound to its session: the
 	// submitted task (shown as that session's primary input line) and the
 	// session the lane answers belong to. Keyed by session so switching
@@ -153,6 +163,14 @@ export function App({
 		selectedSessionIdRef.current = selectedSessionId;
 	}, [selectedSessionId]);
 
+	// Select a session from the tree: switch the selection and reset the
+	// transcript window to its default size (a new session never inherits
+	// another session's pagination).
+	const selectSession = (sessionId: string): void => {
+		setSelectedSessionId(sessionId);
+		setTranscriptLimit(TRANSCRIPT_PAGE_SIZE);
+	};
+
 	const run = useRun({
 		createSocket,
 		onSessionUpdated: (sessionId) => {
@@ -206,7 +224,8 @@ export function App({
 	}, []);
 
 	// Watch the viewed session and read its transcript from the store on
-	// selection change and on every session/updated push (refreshKey).
+	// selection change, on every session/updated push (refreshKey), and on
+	// every "load more" (transcriptLimit grows the window).
 	// biome-ignore lint/correctness/useExhaustiveDependencies: refreshKey is a manual refresh trigger incremented on live updates/reconnect; the effect re-runs on it but never reads its value.
 	useEffect(() => {
 		if (selectedSessionId === undefined) {
@@ -223,13 +242,14 @@ export function App({
 			watchRef.current(selectedSessionId);
 		}
 		let cancelled = false;
-		// A selection change blanks the panel (loading); a live refresh keeps
-		// the prior window visible while the fresh store read is in flight.
+		// A selection change blanks the panel (loading); a live refresh or a
+		// "load more" keeps the prior window visible while the fresh store
+		// read is in flight.
 		if (transcriptForRef.current !== selectedSessionId) {
 			setTranscriptLoading(true);
 		}
 		loadTranscriptRef
-			.current(selectedSessionId)
+			.current(selectedSessionId, transcriptLimit)
 			.then((loaded) => {
 				if (cancelled) {
 					return;
@@ -249,7 +269,7 @@ export function App({
 		return () => {
 			cancelled = true;
 		};
-	}, [selectedSessionId, refreshKey]);
+	}, [selectedSessionId, refreshKey, transcriptLimit]);
 
 	return (
 		<div className="min-h-screen bg-slate-100 text-slate-900">
@@ -277,7 +297,7 @@ export function App({
 					<SessionTreePanel
 						tree={tree}
 						selectedSessionId={selectedSessionId}
-						onSelect={setSelectedSessionId}
+						onSelect={selectSession}
 					/>
 				</aside>
 				{/* biome-ignore lint/a11y/useSemanticElements: interactive resizable separator (ARIA separator pattern), not a static <hr>. */}
@@ -336,6 +356,9 @@ export function App({
 							loading={transcriptLoading}
 							laneTexts={run.laneTexts}
 							runStart={runStart}
+							onLoadMore={() =>
+								setTranscriptLimit((limit) => limit + TRANSCRIPT_PAGE_SIZE)
+							}
 						/>
 						<section
 							aria-label="Run"
