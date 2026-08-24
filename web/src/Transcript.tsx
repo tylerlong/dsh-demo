@@ -66,9 +66,9 @@ export interface TranscriptProps {
 function roleClass(role: TranscriptRole): string {
 	switch (role) {
 		case "input":
-			return "bg-sky-100 text-sky-900";
-		case "output":
 			return "bg-emerald-50 text-emerald-900";
+		case "output":
+			return "bg-sky-100 text-sky-900";
 		default:
 			return "text-slate-600";
 	}

@@ -7,6 +7,7 @@
  * boundary (HTTP + WebSocket), injecting a fixed model list instead of booting
  * the harness. The run lifecycle (submit/cancel over the socket) is ticket #4.
  */
+import { createServer } from "node:net";
 import { fileURLToPath } from "node:url";
 import { build } from "vite";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -17,6 +18,7 @@ import {
 	type RunRequest,
 } from "../src/run-factory.ts";
 import {
+	DEFAULT_PORT,
 	type ModelOption,
 	type ServerHandle,
 	type ServerOptions,
@@ -129,16 +131,34 @@ afterEach(async () => {
 	await Promise.all(live.splice(0).map((handle) => handle.close()));
 });
 
+/** Whether something is already listening on 127.0.0.1:port. */
+function isPortInUse(port: number): Promise<boolean> {
+	return new Promise((resolve) => {
+		const probe = createServer();
+		probe.once("error", () => resolve(true));
+		probe.listen(port, "127.0.0.1", () => {
+			probe.close(() => resolve(false));
+		});
+	});
+}
+
 describe("server boot", () => {
-	it("binds to 127.0.0.1 on the default port 4173 and prints its URL", async () => {
+	it("binds to 127.0.0.1 on the default port 4173 and prints its URL", async (ctx) => {
+		// The default port may already be owned by a dev server (pnpm serve).
+		// Binding would collide, so skip the assertion instead of failing —
+		// and never kill whatever is listening there.
+		if (await isPortInUse(DEFAULT_PORT)) {
+			ctx.skip();
+			return;
+		}
 		const log = vi.spyOn(console, "log").mockImplementation(() => {});
 		const handle = await start();
 
 		expect(handle.host).toBe("127.0.0.1");
-		expect(handle.port).toBe(4173);
-		expect(handle.url).toBe("http://127.0.0.1:4173");
+		expect(handle.port).toBe(DEFAULT_PORT);
+		expect(handle.url).toBe(`http://127.0.0.1:${DEFAULT_PORT}`);
 		expect(console.log).toHaveBeenCalledWith(
-			expect.stringContaining("http://127.0.0.1:4173"),
+			expect.stringContaining(`http://127.0.0.1:${DEFAULT_PORT}`),
 		);
 		log.mockRestore();
 	});

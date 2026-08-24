@@ -67,10 +67,12 @@ describe("Transcript", () => {
 		expect(input).toBeDefined();
 		expect(output).toBeDefined();
 		expect(tool).toBeDefined();
-		// Input and output carry distinct background classes.
-		expect(input?.className).toContain("bg-sky-100");
-		expect(output?.className).not.toContain("bg-sky-100");
-		expect(output?.className).toContain("bg-emerald-50");
+		// Input and output carry distinct background classes: user input is
+		// green, model output is blue.
+		expect(input?.className).toContain("bg-emerald-50");
+		expect(input?.className).not.toContain("bg-sky-100");
+		expect(output?.className).toContain("bg-sky-100");
+		expect(output?.className).not.toContain("bg-emerald-50");
 		// The default line has no input/output background.
 		expect(tool?.className).not.toContain("bg-sky-100");
 		expect(tool?.className).not.toContain("bg-emerald-50");
