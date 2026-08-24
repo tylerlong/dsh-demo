@@ -31,9 +31,11 @@ import type { LlmRuntime } from "@deepseek-ai/dsh-llm";
 import type { ModelOption } from "./model-list.ts";
 import { convertLlmModels } from "./model-list.ts";
 import type { SessionTranscript } from "./session-transcript.ts";
+import { liveLanesFor } from "./live-lanes.ts";
 import {
 	convertSessionTranscript,
 	type TranscriptStoreLike,
+	type TranscriptWindow,
 } from "./session-transcript.ts";
 import type { WorkspaceNode } from "./session-tree.ts";
 import {
@@ -168,20 +170,40 @@ export function loadSessionsFromContext(
  * the shared session store, pinned to the transcript-read seam shape. Strictly
  * read-only — only `store.inspect()` (child #46: no parentSession listing), never
  * a mutation. A read failure resolves to an empty transcript ([]-equivalent)
- * and logs, matching serve.ts today. Live lane windows are supplied by the
- * caller when our own run is active.
+ * and logs, matching serve.ts today. The two live lane-worker windows of our
+ * own in-progress run (registered by the run factory in live-lanes.ts) are
+ * read alongside the primary, so a live run renders its two lanes while it
+ * is active; with no live run the lanes stay empty.
  */
 export function loadTranscriptFromContext(
 	ctx: Context,
 ): (sessionId: string) => Promise<SessionTranscript> {
 	const store: TranscriptStoreLike = service(ctx, "sessionPersistence");
-	return (sessionId) =>
-		convertSessionTranscript(store, sessionId).catch((error) => {
+	return async (sessionId) => {
+		try {
+			// Our own live run's lane-worker children supply the live lanes
+			// (spec #44, User Story 8): read each live worker's store window the
+			// same way the primary window is read, so the lane transcripts render
+			// alongside the primary while the run is in progress. With no live
+			// run for this session, the registry is empty and lanes stay [].
+			const liveLaneRefs = liveLanesFor(sessionId);
+			const liveLanes: TranscriptWindow[] = await Promise.all(
+				liveLaneRefs.map(async (ref) => {
+					const window = await convertSessionTranscript(
+						store,
+						ref.workerSessionId,
+					);
+					return { sessionId: ref.workerSessionId, lines: window.primary.lines };
+				}),
+			);
+			return await convertSessionTranscript(store, sessionId, liveLanes);
+		} catch (error) {
 			console.error(
 				`harness-workflow: failed to read session ${sessionId} transcript: ${error instanceof Error ? error.message : error}`,
 			);
 			return { primary: { sessionId, lines: [] }, lanes: [] };
-		});
+		}
+	};
 }
 
 /**
