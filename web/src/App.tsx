@@ -86,8 +86,13 @@ export function App({
 	>(undefined);
 	const [transcriptLoading, setTranscriptLoading] = useState(false);
 	const [refreshKey, setRefreshKey] = useState(0);
-	// The task of the most recent run (shown as the primary's input line).
-	const [lastTask, setLastTask] = useState<string | undefined>(undefined);
+	// The most recent run that actually began, bound to its session: the
+	// submitted task (shown as that session's primary input line) and the
+	// session the lane answers belong to. Keyed by session so switching
+	// sessions never shows one run's content under another's transcript.
+	const [runStart, setRunStart] = useState<
+		{ sessionId: string; task: string } | undefined
+	>(undefined);
 	// Which session the current transcript belongs to; used to keep the prior
 	// window visible during a live refresh (only a selection change blanks it).
 	const [transcriptFor, setTranscriptFor] = useState<string | undefined>(
@@ -233,8 +238,12 @@ export function App({
 						sessionId={selectedSessionId}
 						locked={run.locked}
 						onSubmit={(request) => {
-							setLastTask(request.task);
-							run.submit(request);
+							// Record the run only when the request was actually
+							// sent (submit is a no-op while disconnected or a
+							// run is active).
+							if (run.submit(request)) {
+								setRunStart({ sessionId: request.sessionId, task: request.task });
+							}
 						}}
 						onCancel={run.cancel}
 					/>
@@ -243,7 +252,7 @@ export function App({
 						transcript={transcript}
 						loading={transcriptLoading}
 						laneTexts={run.laneTexts}
-						task={lastTask}
+						runStart={runStart}
 					/>
 					<section
 						aria-label="Run"

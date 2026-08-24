@@ -188,11 +188,19 @@ test("the submitted question shows as the primary input and both lane answers st
 	});
 
 	// Both lane answers stream in over the socket (lane/worker/delta) and
-	// render as the two worker windows, each with real output.
+	// render as the two worker windows, each with the real answer — not the
+	// injected workspace context that used to dominate the store-read child
+	// session windows (regression: the "irrelevant transcript" symptom).
 	const workers = page.getByTestId("transcript-worker");
 	await expect(workers).toHaveCount(2, { timeout: 60_000 });
-	await expect(workers.nth(0)).not.toBeEmpty();
-	await expect(workers.nth(1)).not.toBeEmpty();
+	for (let i = 0; i < 2; i++) {
+		await expect(workers.nth(i)).not.toBeEmpty();
+		await expect(workers.nth(i)).not.toContainText("CONTEXT.md", {
+			timeout: 5_000,
+		});
+		await expect(workers.nth(i)).not.toContainText("Agent skills");
+		await expect(workers.nth(i)).not.toContainText("workspace instructions");
+	}
 
 	// Both lanes complete, and the answers persist after the run ends (they
 	// are no longer cleared when the run settles).
