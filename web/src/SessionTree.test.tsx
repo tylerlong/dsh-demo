@@ -31,7 +31,7 @@ const TREE: SessionTreeData = [
 			},
 			{
 				id: "session-2",
-				label: "Untitled session",
+				label: "alpha-project",
 				updatedAt: 1700000500000,
 			},
 		],
@@ -64,12 +64,12 @@ describe("SessionTree", () => {
 		expect(screen.getByTestId("session-row-session-2")).toBeInTheDocument();
 		expect(screen.getByTestId("session-row-session-3")).toBeInTheDocument();
 
-		// Each row shows its readable label (stored title or placeholder).
+		// Each row shows its readable label (stored title, else folder basename).
 		expect(screen.getByTestId("session-row-session-1")).toHaveTextContent(
 			"Refactor the seam",
 		);
 		expect(screen.getByTestId("session-row-session-2")).toHaveTextContent(
-			"Untitled session",
+			"alpha-project",
 		);
 		expect(screen.getByTestId("session-row-session-3")).toHaveTextContent(
 			"Wire the run",

@@ -66,7 +66,7 @@ const SESSIONS: WorkspaceNode[] = [
 		path: "/opt/beta-project",
 		title: "Beta",
 		sessions: [
-			{ id: "session-3", label: "Untitled session", updatedAt: 1700001000000 },
+			{ id: "session-3", label: "session-3", updatedAt: 1700001000000 },
 		],
 	},
 ];

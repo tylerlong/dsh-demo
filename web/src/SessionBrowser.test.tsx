@@ -67,7 +67,7 @@ const SESSION_TREE: SessionTree = [
 		sessions: [
 			{
 				id: "session-3",
-				label: "Untitled session",
+				label: "beta-project",
 				updatedAt: 1700000200000,
 			},
 		],
