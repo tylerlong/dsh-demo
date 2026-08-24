@@ -106,11 +106,62 @@ export function Transcript({
 	laneTexts,
 	runStart,
 }: TranscriptProps) {
+	// A run's live content (its task + lane answers) belongs only to the
+	// session it was submitted on; a different selection shows only that
+	// session's store transcript.
+	const isRunSession =
+		runStart !== undefined && runStart.sessionId === sessionId;
+	// The submitted task of our own run shows as the primary's input line
+	// (the resumed orchestrator session itself is never driven, so the
+	// question lives in the submitted task, not the stored primary window).
+	const runTaskLine: TranscriptLine[] =
+		isRunSession && runStart.task !== "" ? [{ text: runStart.task, role: "input" }] : [];
+	// The live lane answers streamed over the socket (kept after the run
+	// ends) are the run session's lane windows. On a run session they
+	// ALWAYS replace the store-read lanes — which would show only the
+	// injected workspace context before the first delta arrives.
+	const streamedLanes = (["left", "right"] as const)
+		.map((laneId) => ({ laneId, text: laneTexts?.[laneId] ?? "" }))
+		.filter((lane) => lane.text !== "");
+	const runLaneWindows: readonly TranscriptWindow[] = streamedLanes.map(
+		(lane) => ({
+			sessionId: "lane-" + lane.laneId,
+			lines: [{ text: lane.text, role: "output" } as TranscriptLine],
+		}),
+	);
+
 	let body: ReactNode;
 	if (sessionId === undefined) {
 		body = (
 			<div className="text-xs text-gray-500">
 				Select a session to view its transcript.
+			</div>
+		);
+	} else if (isRunSession) {
+		// The run's own content renders regardless of the store read — a
+		// selection change or a failed read must never blank the question and
+		// the streamed answers ("nothing left in the UI").
+		const primaryLines: readonly TranscriptLine[] = [
+			...runTaskLine,
+			...(transcript?.primary.lines ?? []),
+		];
+		body = (
+			<div className="flex flex-col gap-2">
+				<Window
+					sessionId={sessionId}
+					lines={primaryLines}
+					label="Primary"
+					testId="transcript-primary"
+				/>
+				{runLaneWindows.map((window) => (
+					<Window
+						key={window.sessionId}
+						sessionId={window.sessionId}
+						lines={window.lines}
+						label="Lane worker"
+						testId="transcript-worker"
+					/>
+				))}
 			</div>
 		);
 	} else if (loading) {
@@ -122,40 +173,15 @@ export function Transcript({
 			</div>
 		);
 	} else {
-		// A run's live content (its task + lane answers) belongs only to the
-		// session it was submitted on; a different selection shows only that
-		// session's store transcript.
-		const isRunSession =
-			runStart !== undefined && runStart.sessionId === sessionId;
-		// The submitted task of our own run shows as the primary's input line
-		// (the resumed orchestrator session itself is never driven, so the
-		// question lives in the submitted task, not the stored primary window).
-		const primaryLines: readonly TranscriptLine[] =
-			isRunSession && runStart.task !== ""
-				? [{ text: runStart.task, role: "input" }, ...transcript.primary.lines]
-				: transcript.primary.lines;
-		// The live lane answers streamed over the socket (kept after the run
-		// ends) are the run session's lane windows. On a run session they
-		// ALWAYS replace the store-read lanes — which would show only the
-		// injected workspace context before the first delta arrives.
-		const streamedLanes = (["left", "right"] as const)
-			.map((laneId) => ({ laneId, text: laneTexts?.[laneId] ?? "" }))
-			.filter((lane) => lane.text !== "");
-		const laneWindows: readonly TranscriptWindow[] = isRunSession
-			? streamedLanes.map((lane) => ({
-					sessionId: "lane-" + lane.laneId,
-					lines: [{ text: lane.text, role: "output" } as TranscriptLine],
-				}))
-			: transcript.lanes;
 		body = (
 			<div className="flex flex-col gap-2">
 				<Window
 					sessionId={transcript.primary.sessionId}
-					lines={primaryLines}
+					lines={transcript.primary.lines}
 					label="Primary"
 					testId="transcript-primary"
 				/>
-				{laneWindows.map((window) => (
+				{transcript.lanes.map((window) => (
 					<Window
 						key={window.sessionId}
 						sessionId={window.sessionId}

@@ -115,6 +115,73 @@ describe("Transcript", () => {
 		expect(workers[1]?.textContent ?? "").toContain("right answer");
 	});
 
+	it("on the run session, streamed lanes always replace the store-read lanes (no injected context)", () => {
+		render(
+			<Transcript
+				sessionId="session-1"
+				transcript={{
+					primary: { sessionId: "session-1", lines: [] },
+					// The store read of the child session is dominated by the
+					// injected workspace context — it must never render.
+					lanes: [
+						{
+							sessionId: "session-1-child",
+							lines: [
+								{ text: "CONTEXT.md", role: "input" },
+								{ text: "Agent skills", role: "input" },
+							],
+						},
+					],
+				}}
+				loading={false}
+				runStart={{ sessionId: "session-1", task: "question" }}
+				laneTexts={{ left: "left answer", right: "right answer" }}
+			/>,
+		);
+		const workers = screen.getAllByTestId("transcript-worker");
+		expect(workers).toHaveLength(2);
+		expect(workers[0]?.textContent ?? "").toContain("left answer");
+		expect(screen.queryByText("CONTEXT.md")).not.toBeInTheDocument();
+		expect(screen.queryByText("Agent skills")).not.toBeInTheDocument();
+	});
+
+	it("keeps the run's question and answers visible while the store read is loading or failed", () => {
+		// Loading: the run content still renders.
+		const { unmount } = render(
+			<Transcript
+				sessionId="session-1"
+				transcript={undefined}
+				loading={true}
+				runStart={{ sessionId: "session-1", task: "question" }}
+				laneTexts={{ left: "left answer" }}
+			/>,
+		);
+		expect(screen.getByTestId("transcript-primary")).toHaveTextContent(
+			"question",
+		);
+		expect(screen.getByTestId("transcript-worker")).toHaveTextContent(
+			"left answer",
+		);
+		unmount();
+
+		// Failed read (transcript undefined): the run content still renders.
+		render(
+			<Transcript
+				sessionId="session-1"
+				transcript={undefined}
+				loading={false}
+				runStart={{ sessionId: "session-1", task: "question" }}
+				laneTexts={{ left: "left answer" }}
+			/>,
+		);
+		expect(screen.getByTestId("transcript-primary")).toHaveTextContent(
+			"question",
+		);
+		expect(screen.getByTestId("transcript-worker")).toHaveTextContent(
+			"left answer",
+		);
+	});
+
 	it("never shows one run's content under another session's transcript", () => {
 		render(
 			<Transcript
