@@ -121,7 +121,10 @@ export async function convertSessionTree(
 	return registry.list().map((workspace) => {
 		// Only top-level, non-blank conversations are shown: subagent children
 		// (the lane workers every run spawns) and blank sessions (no turn ever
-		// ran — DSH web sessionVisible) never appear in the panel.
+		// ran) never appear in the panel. This drops every blank session — unlike
+		// DSH web's sessionVisible, which keeps the current/provisional blank
+		// "New Session" row, because this read-only listing has no such row of
+		// its own; the filter's shape otherwise matches sessionVisible.
 		const rows: SessionRow[] = [];
 		for (const sessionId of workspace.sessionIds) {
 			const header = byId.get(sessionId);

@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 
 /**
  * harness-workflow end-to-end tests against the real server (see playwright.config.ts).
@@ -53,9 +53,10 @@ const REPO_PATH = process.cwd();
 
 /**
  * A deterministic session to resume for a submitted run, chosen so it never
- * touches the live session in this repo's own workspace. Prefers a real second
- * workspace (the langchain-demo fixture); falls back to the newest session of
- * the oldest non-this-repo workspace. undefined only when every registered
+ * touches the live session in this repo's own workspace. Prefers a non-repo
+ * workspace whose path references the langchain-demo fixture; otherwise the
+ * registry-first non-repo workspace's newest session (workspaces keep durable
+ * registry order, never date-sorted). undefined only when every registered
  * workspace is this repo's — the run-form tests then fail fast rather than
  * resume the live session.
  */
@@ -71,8 +72,8 @@ function safeTargetSession(
 	const fixture = otherWorkspaces.find((workspace) =>
 		workspace.path.includes("langchain-demo"),
 	);
-	const workspace = fixture ?? otherWorkspaces[0];
-	return workspace?.sessions[0];
+	// sessions[0] is the workspace's newest (the tree sorts by updatedAt desc).
+	return (fixture ?? otherWorkspaces[0])?.sessions[0];
 }
 
 /**
@@ -90,6 +91,29 @@ function latestSession(tree: readonly WorkspaceRow[]): SessionRow | undefined {
 		}
 	}
 	return latest;
+}
+
+/**
+ * Fetch the tree and click the safe (non-live) target row, asserting it
+ * becomes selected. Shared by the run-form tests so none of them ever resumes
+ * the live session without repeating this block.
+ */
+async function selectSafeSession(page: Page): Promise<SessionRow> {
+	const tree = (await (
+		await page.request.get("/api/sessions")
+	).json()) as readonly WorkspaceRow[];
+	const target = safeTargetSession(tree);
+	if (target === undefined) {
+		throw new Error(
+			"no non-live session to continue; refusing to resume the live session",
+		);
+	}
+	await page.getByTestId(`session-row-${target.id}`).click();
+	await expect(page.getByTestId(`session-row-${target.id}`)).toHaveAttribute(
+		"aria-selected",
+		"true",
+	);
+	return target;
 }
 
 test("page loads, WS connects, model dropdowns populate, session tree renders, no console errors", async ({
@@ -170,18 +194,7 @@ test("preselects the latest session (read-only) and continues a safe session thr
 
 	// Continue a SAFE session (a second workspace's, never this repo's live
 	// session): click its row, then run the form through to done.
-	const target = safeTargetSession(tree);
-	expect(target).toBeDefined();
-	if (target === undefined) {
-		throw new Error(
-			"no non-live session to continue; refusing to resume the live session",
-		);
-	}
-	await page.getByTestId(`session-row-${target.id}`).click();
-	await expect(page.getByTestId(`session-row-${target.id}`)).toHaveAttribute(
-		"aria-selected",
-		"true",
-	);
+	await selectSafeSession(page);
 
 	// The task field starts empty; typing arms the run on the selected session.
 	await expect(page.getByLabel("Task")).toHaveValue("");
@@ -225,21 +238,7 @@ test("the submitted question shows as the primary input and both lane answers st
 
 	// Continue a safe (non-live) session so the run never resumes this repo's
 	// live session.
-	const tree = (await (
-		await page.request.get("/api/sessions")
-	).json()) as readonly WorkspaceRow[];
-	const target = safeTargetSession(tree);
-	expect(target).toBeDefined();
-	if (target === undefined) {
-		throw new Error(
-			"no non-live session to continue; refusing to resume the live session",
-		);
-	}
-	await page.getByTestId(`session-row-${target.id}`).click();
-	await expect(page.getByTestId(`session-row-${target.id}`)).toHaveAttribute(
-		"aria-selected",
-		"true",
-	);
+	await selectSafeSession(page);
 
 	// Submit a real question; the primary panel shows it as its input line
 	// (the resumed orchestrator is never driven, so the question lives in the
@@ -293,24 +292,9 @@ test("walking the tree switches the transcript and the watched session", async (
 		timeout: 15_000,
 	});
 
-	const tree = (await (
-		await page.request.get("/api/sessions")
-	).json()) as readonly WorkspaceRow[];
-	const target = safeTargetSession(tree);
-	expect(target).toBeDefined();
-	if (target === undefined) {
-		throw new Error(
-			"no non-live session to walk to; refusing to select the live session",
-		);
-	}
-
 	// Click a safe session: its row highlights and the transcript panel shows
 	// that session's output.
-	await page.getByTestId(`session-row-${target.id}`).click();
-	await expect(page.getByTestId(`session-row-${target.id}`)).toHaveAttribute(
-		"aria-selected",
-		"true",
-	);
+	const target = await selectSafeSession(page);
 	await expect(page.getByTestId("transcript-session")).toContainText(target.id);
 });
 
@@ -327,21 +311,7 @@ test("cancel aborts a running comparison and returns the UI to idle", async ({
 
 	// Continue a safe (non-live) session so the run never resumes this repo's
 	// live session.
-	const tree = (await (
-		await page.request.get("/api/sessions")
-	).json()) as readonly WorkspaceRow[];
-	const target = safeTargetSession(tree);
-	expect(target).toBeDefined();
-	if (target === undefined) {
-		throw new Error(
-			"no non-live session to continue; refusing to resume the live session",
-		);
-	}
-	await page.getByTestId(`session-row-${target.id}`).click();
-	await expect(page.getByTestId(`session-row-${target.id}`)).toHaveAttribute(
-		"aria-selected",
-		"true",
-	);
+	await selectSafeSession(page);
 
 	const LONG_TASK =
 		"Write a detailed 1000-word essay about the history of computing from 1940 to the present, covering hardware, software, and the internet.";
