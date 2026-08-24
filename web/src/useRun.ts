@@ -85,10 +85,12 @@ export interface UseRunResult {
 	/** Whether a run is active: locks the form inputs and arms Cancel. */
 	readonly locked: boolean;
 	/**
-	 * Submit a run request over the socket (no-op unless connected and no run
-	 * is active; a terminal run frees the form for a new one).
+	 * Submit a run request over the socket; returns whether the request was
+	 * actually sent (false when not connected or a run is active; a terminal
+	 * run frees the form for a new one). The caller records the run only when
+	 * it really begins.
 	 */
-	readonly submit: (request: RunRequest) => void;
+	readonly submit: (request: RunRequest) => boolean;
 	/** Cancel the active run over the socket (no-op unless a run is running). */
 	readonly cancel: () => void;
 	/**
@@ -297,15 +299,16 @@ export function useRun({
 	 * Submit a run request; ignored unless connected and no run is active.
 	 * A terminal run (done / error / canceled) frees the form for a new one.
 	 */
-	const submit = (request: RunRequest): void => {
+	const submit = (request: RunRequest): boolean => {
 		const ws = wsRef.current;
 		if (ws === null || ws.readyState !== WebSocket.OPEN) {
-			return;
+			return false;
 		}
 		if (runStateRef.current === "running") {
-			return;
+			return false;
 		}
 		ws.send(JSON.stringify({ type: "submit", request }));
+		return true;
 	};
 
 	/** Cancel the active run; ignored unless a run is running. */

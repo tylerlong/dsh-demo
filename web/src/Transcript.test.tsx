@@ -101,7 +101,7 @@ describe("Transcript", () => {
 				sessionId="session-1"
 				transcript={{ primary: { sessionId: "session-1", lines: [] }, lanes: [] }}
 				loading={false}
-				task="what is your ai model?"
+				runStart={{ sessionId: "session-1", task: "what is your ai model?" }}
 				laneTexts={{ left: "left answer", right: "right answer" }}
 			/>,
 		);
@@ -113,6 +113,24 @@ describe("Transcript", () => {
 		expect(workers).toHaveLength(2);
 		expect(workers[0]?.textContent ?? "").toContain("left answer");
 		expect(workers[1]?.textContent ?? "").toContain("right answer");
+	});
+
+	it("never shows one run's content under another session's transcript", () => {
+		render(
+			<Transcript
+				sessionId="session-2"
+				transcript={{ primary: { sessionId: "session-2", lines: [] }, lanes: [] }}
+				loading={false}
+				// The run belongs to session-1; session-2 is selected.
+				runStart={{ sessionId: "session-1", task: "what is your ai model?" }}
+				laneTexts={{ left: "left answer", right: "right answer" }}
+			/>,
+		);
+		// No task line, no streamed lane windows.
+		expect(screen.getByTestId("transcript-primary")).not.toHaveTextContent(
+			"what is your ai model?",
+		);
+		expect(screen.queryAllByTestId("transcript-worker")).toHaveLength(0);
 	});
 
 	it("renders the pre-selection invite and the empty transcript hint", () => {

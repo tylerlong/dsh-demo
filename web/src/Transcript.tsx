@@ -38,8 +38,17 @@ export interface TranscriptProps {
 	 * shows only the injected workspace context, not the answer).
 	 */
 	readonly laneTexts?: Partial<Record<LaneId, string>>;
-	/** The submitted task of the most recent run, shown as an input line. */
-	readonly task?: string;
+	/**
+	 * The run that actually began, bound to its session: the submitted task
+	 * (shown as that session's primary input line) and the session the lane
+	 * answers belong to. Only rendered when it matches the selected session,
+	 * so switching sessions never shows one run's content under another's
+	 * transcript. While a run is bound to the selected session, the streamed
+	 * lane answers replace the store-read lane windows (which would show only
+	 * the injected workspace context, never the answer) even before the first
+	 * delta arrives.
+	 */
+	readonly runStart?: { sessionId: string; task: string } | undefined;
 }
 
 /** One line's background class for its role (input/output styled; default). */
@@ -95,7 +104,7 @@ export function Transcript({
 	transcript,
 	loading,
 	laneTexts,
-	task,
+	runStart,
 }: TranscriptProps) {
 	let body: ReactNode;
 	if (sessionId === undefined) {
@@ -113,26 +122,31 @@ export function Transcript({
 			</div>
 		);
 	} else {
+		// A run's live content (its task + lane answers) belongs only to the
+		// session it was submitted on; a different selection shows only that
+		// session's store transcript.
+		const isRunSession =
+			runStart !== undefined && runStart.sessionId === sessionId;
 		// The submitted task of our own run shows as the primary's input line
 		// (the resumed orchestrator session itself is never driven, so the
-		// question lives here, not in the stored primary window).
+		// question lives in the submitted task, not the stored primary window).
 		const primaryLines: readonly TranscriptLine[] =
-			task !== undefined && task !== ""
-				? [{ text: task, role: "input" }, ...transcript.primary.lines]
+			isRunSession && runStart.task !== ""
+				? [{ text: runStart.task, role: "input" }, ...transcript.primary.lines]
 				: transcript.primary.lines;
 		// The live lane answers streamed over the socket (kept after the run
-		// ends) replace the store-read lane windows, which show only the
-		// injected workspace context — never the answer.
+		// ends) are the run session's lane windows. On a run session they
+		// ALWAYS replace the store-read lanes — which would show only the
+		// injected workspace context before the first delta arrives.
 		const streamedLanes = (["left", "right"] as const)
 			.map((laneId) => ({ laneId, text: laneTexts?.[laneId] ?? "" }))
 			.filter((lane) => lane.text !== "");
-		const laneWindows: readonly TranscriptWindow[] =
-			streamedLanes.length > 0
-				? streamedLanes.map((lane) => ({
-						sessionId: "lane-" + lane.laneId,
-						lines: [{ text: lane.text, role: "output" } as TranscriptLine],
-					}))
-				: transcript.lanes;
+		const laneWindows: readonly TranscriptWindow[] = isRunSession
+			? streamedLanes.map((lane) => ({
+					sessionId: "lane-" + lane.laneId,
+					lines: [{ text: lane.text, role: "output" } as TranscriptLine],
+				}))
+			: transcript.lanes;
 		body = (
 			<div className="flex flex-col gap-2">
 				<Window
