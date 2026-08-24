@@ -30,6 +30,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import type { Context } from "@deepseek-ai/cordis";
 import { boot, loadOverlayPatches } from "@deepseek-ai/dsh-app-boot";
 import { provideCmdline } from "@deepseek-ai/dsh-cmdline";
+import { z } from "zod";
 
 /** This project's root directory (parent of src/). */
 const PROJECT_ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -101,5 +102,100 @@ export async function bootHarness(
 		bareBase,
 	);
 	ctx = tree;
+	registerSessionListMetadata(tree);
 	return tree;
+}
+
+/**
+ * The sessionListMetadata projection state: whether the checkpoint prefix
+ * contains no turn/start event, and the latest user-origin message time.
+ * Mirrors DSH web's SessionListMetadata (api-proxy sessions.ts).
+ */
+interface SessionListMetadataState {
+	readonly blank: boolean;
+	readonly lastPromptAt: number | null;
+}
+
+/** One committed session event, structurally (the shared store's event shape). */
+interface SessionEventLike {
+	readonly type: string;
+	readonly time: number;
+	readonly data: unknown;
+}
+
+/** The narrow slice of the projection registry this boot needs. */
+interface SessionProjectionRegistryLike {
+	register(definition: {
+		readonly key: string;
+		readonly stateSchema: { parse(value: unknown): unknown };
+		init(): unknown;
+		apply(state: unknown, event: unknown): unknown;
+		readonly wire?: {
+			readonly viewSchema: { parse(value: unknown): unknown };
+			view(state: unknown): unknown;
+		};
+		readonly stateVersion: number;
+	}): () => void;
+}
+
+/**
+ * Register the `sessionListMetadata` projection unit, mirroring DSH web's
+ * api-proxy registration (api-proxy.ts:1231-1241). The projection cache's
+ * `cachedSnapshot` serves `sessionListMetadata` (`{blank, lastPromptAt}`)
+ * only after this unit is registered — mounting the cache alone omits it even
+ * though the row exists in the cache file. `title` comes free from the base
+ * bundle's session-title row.
+ *
+ * Registered here, read-only: the unit only advances by committed events
+ * (which this process never writes); `cachedSnapshot` reads the stored row.
+ */
+function registerSessionListMetadata(ctx: Context): void {
+	const registry = ctx.get("sessionProjections") as
+		| SessionProjectionRegistryLike
+		| undefined;
+	if (registry === undefined) {
+		// The base bundle always composes the projection registry; if it is
+		// ever absent, the cache face simply serves no sessionListMetadata.
+		return;
+	}
+	registry.register({
+		key: "sessionListMetadata",
+		stateSchema: z.object({
+			blank: z.boolean(),
+			lastPromptAt: z.number().nullable(),
+		}),
+		init: () => ({ blank: true, lastPromptAt: null }),
+		apply: applySessionListMetadata,
+		wire: {
+			viewSchema: z.object({
+				blank: z.boolean(),
+				lastPromptAt: z.number().nullable(),
+			}),
+			view: (state) => state,
+		},
+		stateVersion: 1,
+	});
+}
+
+/** Advance the sessionListMetadata hint by one committed event. */
+function applySessionListMetadata(
+	state: SessionListMetadataState,
+	event: SessionEventLike,
+): SessionListMetadataState {
+	const blank = state.blank && event.type !== "turn/start";
+	const lastPromptAt =
+		event.type === "user/message" &&
+		isRecord(event.data) &&
+		isRecord(event.data.source) &&
+		event.data.source.kind === "user"
+			? event.time
+			: state.lastPromptAt;
+	return blank === state.blank && lastPromptAt === state.lastPromptAt
+		? state
+		: { blank, lastPromptAt };
+}
+
+/** Narrow an unknown value to a plain record, or undefined otherwise. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
 }

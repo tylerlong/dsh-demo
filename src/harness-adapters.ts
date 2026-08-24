@@ -54,14 +54,16 @@ function service<T>(ctx: Context, name: string): T {
 }
 
 /** The narrow slice of the shared session store this loader needs: a header
- * listing with each session id, createdAt, and origin marker, plus the
- * per-session event read the recency fold needs (matching DSH web, which
- * derives updatedAt and blank from each session events). */
+ * listing with each session id, createdAt, cwd (the cache identity witness),
+ * and origin marker, plus the per-session event read the recency fold needs
+ * (matching DSH web, which derives updatedAt and blank from each session
+ * events). */
 export interface SessionPersistenceLike {
 	list(): Promise<
 		readonly {
 			readonly id: string;
 			readonly createdAt: number;
+			readonly cwd?: string;
 			readonly origin?: "subagent";
 		}[]
 	>;
@@ -74,6 +76,33 @@ export interface SessionPersistenceLike {
 			readonly data: unknown;
 		}[];
 	}>;
+}
+
+/**
+ * The narrow slice of the projection cache this loader needs: the zero-I/O
+ * per-session read of the stored `title` and `sessionListMetadata` values
+ * (matching DSH web's sessionProjectionCache.cachedSnapshot). The header
+ * passed in is the identity witness — the cache serves a row only when its
+ * bound createdAt/cwd match the caller's header, so a recreated id or a
+ * swapped store can never surface an unrelated log's values.
+ */
+export interface SessionProjectionCacheLike {
+	cachedSnapshot(meta: {
+		readonly id: string;
+		readonly createdAt: number;
+		readonly cwd?: string;
+	}):
+		| {
+				readonly asOfSeq: number;
+				readonly values: {
+					readonly title?: string | null;
+					readonly sessionListMetadata?: {
+						readonly blank: boolean;
+						readonly lastPromptAt: number | null;
+					};
+				};
+		  }
+		| undefined;
 }
 
 /** Narrow an unknown value to a plain record, or undefined otherwise. */
@@ -165,12 +194,15 @@ export function loadModelsFromContext(
 
 /**
  * The /api/sessions loader supplied from the booted context: the shared
- * workspace registry, session store (the storage stack boot.ts mounts), and
- * title read face (ctx.sessionQuery), pinned to the session-tree seam shapes.
- * The store slice the seam consumes enriches each header with the session's
- * stored `label` from the title read face and its `origin` from the persisted
- * header, so the seam filters/orders/truncates purely. Strictly read-only —
- * only `registry.list()`, `sessionPersistence.list()`, and the title read;
+ * workspace registry, session store (the storage stack boot.ts mounts), the
+ * projection cache (boot.ts mounts + registers the sessionListMetadata unit),
+ * and the title read face (ctx.sessionQuery), pinned to the session-tree seam
+ * shapes. The store slice the seam consumes enriches each header with the
+ * session's stored `label` from the projection cache's `title` value and its
+ * `blank` + `updatedAt` from the cache's `sessionListMetadata` value, so the
+ * seam filters/orders/truncates purely. Strictly read-only — only
+ * `registry.list()`, `sessionPersistence.list()`, the cache's zero-I/O
+ * `cachedSnapshot`, and (cache-miss fallback) the event fold + title read;
  * never a mutation. A read failure resolves to [] and logs, matching serve.ts
  * today.
  */
@@ -181,6 +213,10 @@ export function loadSessionsFromContext(
 	const persistence: SessionPersistenceLike = service(
 		ctx,
 		"sessionPersistence",
+	);
+	const cache: SessionProjectionCacheLike | undefined = service(
+		ctx,
+		"sessionProjectionCache",
 	);
 	const query: SessionQueryLike | undefined = service(ctx, "sessionQuery");
 	const sessions: SessionStoreLike = {
@@ -194,10 +230,24 @@ export function loadSessionsFromContext(
 			const headers = (await persistence.list()).filter((header) =>
 				registryIds.has(header.id),
 			);
-			// Recency + blank fold: read each session events (matching DSH web
-			// sessionListMetadata) and derive updatedAt = max(createdAt, lastPromptAt).
+			// Recency + blank from the projection cache first: DSH web checkpoints
+			// each session's title and sessionListMetadata into the shared cache,
+			// and cachedSnapshot serves them with zero I/O (the header is the
+			// identity witness). This is the same data DSH web's panel reads, so
+			// the tree matches its grouped Updated view — including the live
+			// session DSH web is actively writing, whose raw log the fold below
+			// cannot read (its tail is mid-write).
+			const cached = headers.map((header) => ({
+				header,
+				snapshot: cache?.cachedSnapshot(header),
+			}));
+			// Sessions the cache misses fall back to the event fold (matching DSH
+			// web sessionListMetadata derivation from events) + the title read.
+			const missing = cached
+				.filter((entry) => entry.snapshot === undefined)
+				.map((entry) => entry.header);
 			const folds = await Promise.all(
-				headers.map(async (h) => {
+				missing.map(async (h) => {
 					try {
 						const inspection = await persistence.inspect(h.id);
 						const fold = sessionListFold(h, inspection.events);
@@ -211,12 +261,24 @@ export function loadSessionsFromContext(
 			);
 			const foldById = new Map(folds.map((fold) => [fold.id, fold]));
 			const labels =
-				query === undefined
+				query === undefined || missing.length === 0
 					? new Map<string, string>()
 					: labelsFromTitles(
-							await query.readTitleSnapshots(headers.map((h) => h.id)),
+							await query.readTitleSnapshots(missing.map((h) => h.id)),
 						);
-			return headers.map((header) => {
+			return cached.map(({ header, snapshot }) => {
+				if (snapshot !== undefined) {
+					const metadata = snapshot.values.sessionListMetadata;
+					const title = snapshot.values.title;
+					return {
+						id: header.id,
+						createdAt: header.createdAt,
+						updatedAt: Math.max(header.createdAt, metadata?.lastPromptAt ?? 0),
+						blank: metadata?.blank ?? false,
+						origin: header.origin,
+						label: title ?? undefined,
+					};
+				}
 				const fold = foldById.get(header.id);
 				return {
 					id: header.id,
