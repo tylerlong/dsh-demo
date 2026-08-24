@@ -123,27 +123,49 @@ function textOfMessage(message: unknown): string | undefined {
 	return parts.length > 0 ? parts.join("\n") : undefined;
 }
 
+/**
+ * Whether a user/assistant message carries the message's `source` inside its
+ * event `data` (user/message carries it on `data.source`; assistant/tool
+ * events nest it on `data.message.source`). Only `kind === "user"` is a typed
+ * user prompt — every other source kind (skill-catalog, skill-invocation,
+ * agent-instructions, plugin, …) is harness-internal model context, not the
+ * user's words, and is hidden from the transcript. The true model reply is the
+ * assistant message's `text` blocks (thinking/reasoning and tool-calls are
+ * separate content-block types and never make it through textOfMessage).
+ */
+function isUserTypedMessage(event: TranscriptEvent): boolean {
+	const data = isRecord(event.data) ? event.data : undefined;
+	const source = data === undefined ? undefined : data.source;
+	return isRecord(source) && source.kind === "user";
+}
+
 /** The visible text one message-producing event contributes, or undefined. */
 function eventText(event: TranscriptEvent): string | undefined {
 	switch (event.type) {
 		case "user/message":
-			return textOfMessage(event.data);
-		case "assistant/message":
-		case "tool/result": {
+			// Only a typed user prompt (source.kind === "user") is shown; skill
+			// invocations, the skill catalog reminder, agent instructions, and
+			// plugin context are harness internals, not the user's words.
+			return isUserTypedMessage(event) ? textOfMessage(event.data) : undefined;
+		case "assistant/message": {
+			// The true user-facing reply: the assistant message's text blocks.
+			// Thinking/reasoning and tool-call content blocks are excluded by
+			// textOfMessage (it reads text blocks only).
 			if (!isRecord(event.data)) return undefined;
 			return textOfMessage(event.data.message);
 		}
 		default:
-			// Boundary markers, chunks, usage, and log-only records contribute
-			// no transcript text (mirrors DSH web's surface fold).
+			// Boundary markers, chunks, usage, log-only records, and tool
+			// results (the model's tool-invocation history) contribute no
+			// transcript text — only user-facing turns are shown.
 			return undefined;
 	}
 }
 
 /**
- * The role one message-producing event's line carries. What was fed to the
- * model (user/message) is input; what the model produced (assistant/
- * message) is output; everything else (tool results, etc.) is default.
+ * The role one shown event's line carries. Only user-typed prompts (input)
+ * and assistant replies (output) are shown at all — eventText already dropped
+ * everything else (harness-internal user sources, tool results, thinking).
  */
 function eventRole(event: TranscriptEvent): TranscriptRole {
 	switch (event.type) {

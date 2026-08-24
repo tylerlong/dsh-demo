@@ -7,11 +7,17 @@ import { registerLiveLanes } from "../src/live-lanes.ts";
 import type { TranscriptEvent } from "../src/session-transcript.ts";
 
 /** Build an event whose data shape matches what the seam's fold consumes:
- *  user/message reads text from data.content; assistant/message from
- *  data.message.content (the message is nested under .message). */
+ *  a typed user/message carries source.kind === "user" (the only input the
+ *  fold shows); assistant/message reads text from data.message.content. */
 function msg(type: string, text: string): TranscriptEvent {
 	if (type === "user/message") {
-		return { type, data: { content: [{ type: "text", text }] } };
+		return {
+			type,
+			data: {
+				content: [{ type: "text", text }],
+				source: { kind: "user" },
+			},
+		};
 	}
 	return { type, data: { message: { content: [{ type: "text", text }] } } };
 }
@@ -106,7 +112,10 @@ describe("loadTranscriptFromContext spliced-session recovery", () => {
 				type: "user/message",
 				seq: 0,
 				time: 1,
-				data: { content: [{ type: "text", text: "parent prompt" }] },
+				data: {
+					content: [{ type: "text", text: "parent prompt" }],
+					source: { kind: "user" },
+				},
 			}),
 			JSON.stringify({ type: "turn/start", seq: 1, time: 2, data: {} }),
 			JSON.stringify({
@@ -121,7 +130,10 @@ describe("loadTranscriptFromContext spliced-session recovery", () => {
 				type: "user/message",
 				seq: 0,
 				time: 5,
-				data: { content: [{ type: "text", text: "child prompt" }] },
+				data: {
+					content: [{ type: "text", text: "child prompt" }],
+					source: { kind: "user" },
+				},
 			}),
 			JSON.stringify({
 				type: "assistant/message",

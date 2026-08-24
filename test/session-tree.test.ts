@@ -115,11 +115,19 @@ function messageEvent(
 	type: "user/message" | "assistant/message" | "tool/result",
 	text: string,
 ): TranscriptEvent {
-	const data =
-		type === "user/message"
-			? { content: [{ type: "text", text }] }
-			: { turn: 0, step: 0, message: { content: [{ type: "text", text }] } };
-	return { type, data };
+	if (type === "user/message") {
+		return {
+			type,
+			data: {
+				content: [{ type: "text", text }],
+				source: { kind: "user" },
+			},
+		};
+	}
+	return {
+		type,
+		data: { turn: 0, step: 0, message: { content: [{ type: "text", text }] } },
+	};
 }
 
 /** A non-message event (boundary/chunk/log-only) contributing no text. */
@@ -471,12 +479,22 @@ describe("session transcript seam", () => {
 		expect(calls).toEqual(["store.inspect:session-primary"]);
 	});
 
-	it("tags each line with its role: user= input, assistant= output, tool= default", async () => {
+	it("tags each line with its role: user= input, assistant= output; hides tool results and non-user sources", async () => {
 		const { store } = fakeTranscriptStore({
 			"session-primary": [
 				messageEvent("user/message", "the request"),
 				messageEvent("assistant/message", "the reply"),
+				// The model's tool-invocation history is not user-facing.
 				messageEvent("tool/result", "the tool output"),
+				// A harness-internal user-source (skill catalog, etc.) is not a
+				// typed prompt and is hidden.
+				{
+					type: "user/message",
+					data: {
+						content: [{ type: "text", text: "skill reminder" }],
+						source: { kind: "skill-catalog", form: "catalog" },
+					},
+				},
 			],
 		});
 
@@ -485,7 +503,65 @@ describe("session transcript seam", () => {
 		expect(transcript.primary.lines).toEqual([
 			{ text: "the request", role: "input" },
 			{ text: "the reply", role: "output" },
-			{ text: "the tool output", role: "default" },
+		]);
+	});
+
+	it("hides harness-internal user sources and thinking blocks; shows only typed prompts and text replies", async () => {
+		const { store } = fakeTranscriptStore({
+			"session-primary": [
+				{
+					type: "user/message",
+					data: {
+						content: [{ type: "text", text: "real prompt" }],
+						source: { kind: "user" },
+					},
+				},
+				// A skill-invocation body is harness context, not the user's words.
+				{
+					type: "user/message",
+					data: {
+						content: [{ type: "text", text: "<skill_content…>" }],
+						source: {
+							kind: "skill-invocation",
+							name: "grill-with-docs",
+							form: "instructions",
+						},
+					},
+				},
+				// Teacher-inserted agent-instructions / plugin context are hidden too.
+				{
+					type: "user/message",
+					data: {
+						content: [{ type: "text", text: "context injection" }],
+						source: { kind: "agent-instructions", form: "instructions" },
+					},
+				},
+				{
+					type: "assistant/message",
+					data: {
+						turn: 0,
+						step: 0,
+						message: {
+							content: [
+								// Thinking is a separate block type, never shown.
+								{ type: "reasoning", text: "the model's hidden reasoning" },
+								{ type: "tool-call", name: "read", input: "{}" },
+								// The real user-facing reply.
+								{ type: "text", text: "the answer" },
+							],
+						},
+					},
+				},
+			],
+		});
+
+		const transcript = await convertSessionTranscript(store, "session-primary");
+
+		// Only the typed prompt and the assistant's text reply remain; every
+		// harness-internal input source and thinking block is filtered.
+		expect(transcript.primary.lines).toEqual([
+			{ text: "real prompt", role: "input" },
+			{ text: "the answer", role: "output" },
 		]);
 	});
 
