@@ -307,6 +307,10 @@ export function useRun({
 		if (runStateRef.current === "running") {
 			return false;
 		}
+		// A freshly sent run starts with empty lane answers: the previous
+		// run's streamed text must never render under the new run (or under
+		// another session) in the gap before run/started arrives.
+		setLaneTexts({ left: "", right: "" });
 		ws.send(JSON.stringify({ type: "submit", request }));
 		return true;
 	};

@@ -264,6 +264,32 @@ describe("useRun run lifecycle", () => {
 		expect(controls().cancel).toBeDisabled();
 	});
 
+	it("a new submit clears the previous run's streamed answers before run/started arrives", async () => {
+		const user = userEvent.setup();
+		const socket = renderApp();
+		await readyForm();
+		act(() => socket.open());
+
+		// First run streams answers and completes.
+		await user.type(controls().task, "haiku");
+		await user.click(controls().submit);
+		act(() => socket.emit({ type: "run/started", runId: "run-1" }));
+		act(() =>
+			socket.emit({ type: "lane/worker/delta", laneId: "left", text: "old answer" }),
+		);
+		act(() => socket.emit({ type: "lane/worker/done", laneId: "left" }));
+		act(() => socket.emit({ type: "lane/worker/done", laneId: "right" }));
+		act(() => socket.emit({ type: "run/done", runId: "run-1" }));
+		expect(screen.getAllByTestId("transcript-worker")).toHaveLength(1);
+
+		// A new run is submitted; the old answers must not render in the gap
+		// before run/started (they belong to the finished run).
+		await user.clear(controls().task);
+		await user.type(controls().task, "haiku two");
+		await user.click(controls().submit);
+		expect(screen.queryAllByTestId("transcript-worker")).toHaveLength(0);
+	});
+
 	it("cancel aborts the active run over the socket and a terminal run frees the form", async () => {
 		const user = userEvent.setup();
 		const socket = renderApp();
