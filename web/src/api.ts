@@ -5,8 +5,9 @@
  * server's model-list endpoint (ticket #32), and the session browser (parent
  * ticket #37) reads the read-only workspace → sessions tree and the selected
  * session's transcript from the server's session endpoints: GET /api/sessions
- * returns the two-level tree (workspaces with their sessions, each labeled by
- * its id), and GET /api/sessions/:id/transcript returns the selected session's
+ * returns the two-level tree (workspaces with their enriched sessions — each
+ * carrying a readable label, its creation time, top-3, subagent-filtered),
+ * and GET /api/sessions/:id/transcript returns the selected session's
  * recent ~100-line window — primary-only, with per-line roles and (when a run
  * is live) the live lane windows (child #46). These thin fetch wrappers mirror
  * the shapes the server serves (see src/session-tree.ts and
@@ -44,8 +45,10 @@ export interface ModelsResponse {
 
 /** One session row under a workspace in the tree (mirror of SessionRow). */
 export interface SessionRow {
-	/** The session's id; also its label (the only stable label). */
+	/** The session's id. */
 	readonly id: string;
+	/** The session's readable label: stored title, else a placeholder. */
+	readonly label: string;
 	/** Unix epoch milliseconds when the session was created. */
 	readonly createdAt: number;
 }
@@ -58,7 +61,7 @@ export interface WorkspaceNode {
 	readonly path: string;
 	/** Display title. */
 	readonly title: string;
-	/** The workspace's sessions, each labeled by its id. */
+	/** The workspace's sessions, each labeled by its readable label. */
 	readonly sessions: readonly SessionRow[];
 }
 

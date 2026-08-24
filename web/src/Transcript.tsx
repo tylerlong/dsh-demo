@@ -1,18 +1,22 @@
 /**
  * Transcript.tsx — the selected session's transcript panel (parent ticket #37;
- * child ticket #46 makes the read primary-only with per-line roles).
+ * child ticket #46 makes the read primary-only with per-line roles; child
+ * ticket #47 styles input vs output and shows the live lanes).
  *
  * The session browser's right panel: the selected session's recent ~100-line
- * window read from the shared store — primary-only (child #46): stored subagent
- * children are never read; each line carries a role (input / output / default)
- * the page styles, and the two lane windows of a live in-progress run are
- * supplied on the read. Output is never assembled from streamed deltas: the
- * panel renders whatever the store read returned, and a session/updated push
- * (or a selection change) triggers a fresh store read. Sessions are labeled by
- * their id only (SessionHeader has no title field).
+ * window read from the shared store — primary-only (child #46): stored
+ * subagent children are never read; each line carries a role the page styles,
+ * and the two live lane-worker windows of our own in-progress run are supplied
+ * on the read and rendered alongside the primary. Output is never assembled
+ * from streamed deltas: the panel renders whatever the store read returned, and
+ * a session/updated push (or a selection change) triggers a fresh store read.
+ *
+ * Per-line styling: model input (user-role) and model output (assistant-role)
+ * each get a distinct background; every other line (tool/step/system) keeps
+ * the default panel style — there is no third background.
  */
 import type { ReactNode } from "react";
-import type { SessionTranscript } from "./api.ts";
+import type { SessionTranscript, TranscriptLine, TranscriptRole } from "./api.ts";
 
 export interface TranscriptProps {
 	/** The selected session's id, or undefined before any selection. */
@@ -23,11 +27,55 @@ export interface TranscriptProps {
 	readonly loading: boolean;
 }
 
-export function Transcript({
+/** One line's background class for its role (input/output styled; default). */
+function roleClass(role: TranscriptRole): string {
+	switch (role) {
+		case "input":
+			return "bg-sky-100 text-sky-900";
+		case "output":
+			return "bg-emerald-50 text-emerald-900";
+		default:
+			return "text-slate-600";
+	}
+}
+
+/** One rendered line of a window, styled by its role. */
+function Line({ line }: { readonly line: TranscriptLine }) {
+	return (
+		<div className={"px-1.5 py-0.5 " + roleClass(line.role)}>{line.text}</div>
+	);
+}
+
+/** One agent's window (primary or live lane), each line styled by role. */
+function Window({
 	sessionId,
-	transcript,
-	loading,
-}: TranscriptProps) {
+	lines,
+	label,
+	testId,
+}: {
+	readonly sessionId: string;
+	readonly lines: readonly TranscriptLine[];
+	readonly label: string;
+	readonly testId: string;
+}) {
+	return (
+		<div className="flex flex-col gap-1">
+			<h3 className="text-xs font-semibold text-slate-600">
+				{label} · {sessionId}
+			</h3>
+			<pre
+				data-testid={testId}
+				className="flex min-h-[48px] flex-col whitespace-pre-wrap break-words rounded-md border border-slate-200 bg-slate-50 p-1.5 font-mono text-xs"
+			>
+				{lines.map((line, index) => (
+					<Line key={index} line={line} />
+				))}
+			</pre>
+		</div>
+	);
+}
+
+export function Transcript({ sessionId, transcript, loading }: TranscriptProps) {
 	let body: ReactNode;
 	if (sessionId === undefined) {
 		body = (
@@ -44,31 +92,22 @@ export function Transcript({
 			</div>
 		);
 	} else {
-		const agents = [
-			{ label: "Primary", window: transcript.primary },
-			...transcript.lanes.map((window) => ({
-				label: "Lane worker",
-				window,
-			})),
-		];
 		body = (
 			<div className="flex flex-col gap-2">
-				{agents.map((agent) => (
-					<div key={agent.window.sessionId} className="flex flex-col gap-1">
-						<h3 className="text-xs font-semibold text-slate-600">
-							{agent.label} · {agent.window.sessionId}
-						</h3>
-						<pre
-							data-testid={
-								agent.label === "Primary"
-									? "transcript-primary"
-									: "transcript-worker"
-							}
-							className="min-h-[48px] whitespace-pre-wrap break-words rounded-md border border-slate-200 bg-slate-50 p-2 font-mono text-xs"
-						>
-							{agent.window.lines.map((line) => line.text).join("\n")}
-						</pre>
-					</div>
+				<Window
+					sessionId={transcript.primary.sessionId}
+					lines={transcript.primary.lines}
+					label="Primary"
+					testId="transcript-primary"
+				/>
+				{transcript.lanes.map((window) => (
+					<Window
+						key={window.sessionId}
+						sessionId={window.sessionId}
+						lines={window.lines}
+						label="Lane worker"
+						testId="transcript-worker"
+					/>
 				))}
 			</div>
 		);

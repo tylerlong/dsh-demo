@@ -3,9 +3,10 @@
  *
  * The session browser's left panel: a two-level listing of the workspaces DSH
  * web owns, each expandable to its sessions, loaded once on page load from
- * /api/sessions. Sessions are labeled by their id — the only stable label the
- * read-only listing provides (SessionHeader has no title field; never invent
- * one). The listing is strictly display-only: no create / delete / edit /
+ * /api/sessions. Each session row shows its readable `label` — its stored title, or a
+ * placeholder when none exists (the enriched seam, ticket #45, already
+ * filtered subagent children, ordered sessions newest-first, and kept the top
+ * 3 per workspace, so this panel only renders what the server served). The listing is strictly display-only: no create / delete / edit /
  * reorder, and sessions appear only under their listed workspace (no
  * "Ungrouped" group). The selected session's row is highlighted; clicking a
  * row reports the selection through onSelect.
@@ -90,7 +91,7 @@ export function SessionTree({
 														: "text-slate-600 hover:bg-slate-100")
 												}
 											>
-												{session.id}
+												<span className="truncate">{session.label}</span>
 											</button>
 										</li>
 									);

@@ -5,7 +5,8 @@
  *
  * The tree renders the two-level workspace → sessions listing: a workspace
  * row per node (expandable to its sessions), and one session row per session
- * labeled by its id. The listing is read-only — display only, no create /
+ * labeled by its readable `label` (the enriched seam already filters,
+ * orders, and top-3-truncates). The listing is read-only — display only, no create /
  * delete / edit / reorder — and sessions appear only under their listed
  * workspace (no "Ungrouped" group). These tests pin what a user sees: the
  * rendered rows, the expand/collapse toggle, the highlighted selection, and
@@ -23,20 +24,28 @@ const TREE: SessionTreeData = [
 		path: "/opt/alpha-project",
 		title: "Alpha",
 		sessions: [
-			{ id: "session-1", createdAt: 1700000000000 },
-			{ id: "session-2", createdAt: 1700000500000 },
+			{
+				id: "session-1",
+				label: "Refactor the seam",
+				createdAt: 1700000000000,
+			},
+			{
+				id: "session-2",
+				label: "Untitled session",
+				createdAt: 1700000500000,
+			},
 		],
 	},
 	{
 		id: "ws-beta",
 		path: "/opt/beta-project",
 		title: "Beta",
-		sessions: [{ id: "session-3", createdAt: 1700001000000 }],
+		sessions: [{ id: "session-3", label: "Wire the run", createdAt: 1700001000000 }],
 	},
 ];
 
 describe("SessionTree", () => {
-	it("renders each workspace expandable to its sessions, labeled by id", async () => {
+	it("renders each workspace expandable to its sessions, labeled by its readable label", async () => {
 		const user = userEvent.setup();
 		render(
 			<SessionTree
@@ -54,6 +63,17 @@ describe("SessionTree", () => {
 		expect(screen.getByTestId("session-row-session-1")).toBeInTheDocument();
 		expect(screen.getByTestId("session-row-session-2")).toBeInTheDocument();
 		expect(screen.getByTestId("session-row-session-3")).toBeInTheDocument();
+
+		// Each row shows its readable label (stored title or placeholder).
+		expect(screen.getByTestId("session-row-session-1")).toHaveTextContent(
+			"Refactor the seam",
+		);
+		expect(screen.getByTestId("session-row-session-2")).toHaveTextContent(
+			"Untitled session",
+		);
+		expect(screen.getByTestId("session-row-session-3")).toHaveTextContent(
+			"Wire the run",
+		);
 
 		// Collapsing a workspace hides its sessions; expanding restores them.
 		await user.click(screen.getByRole("button", { name: /Alpha/ }));

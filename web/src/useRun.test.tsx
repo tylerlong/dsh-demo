@@ -51,8 +51,16 @@ const SESSION_TREE: SessionTree = [
 		path: "/opt/alpha-project",
 		title: "Alpha",
 		sessions: [
-			{ id: "session-1", createdAt: 1700000000000 },
-			{ id: "session-2", createdAt: 1700000500000 },
+			{
+				id: "session-1",
+				label: "Refactor the seam",
+				createdAt: 1700000000000,
+			},
+			{
+				id: "session-2",
+				label: "Wire the run",
+				createdAt: 1700000500000,
+			},
 		],
 	},
 ];
