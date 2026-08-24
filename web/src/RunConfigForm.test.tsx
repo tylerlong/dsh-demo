@@ -94,10 +94,7 @@ describe("RunConfigForm", () => {
 	it("keeps every input disabled until the data has loaded", async () => {
 		const models = deferred<ModelsResponse>();
 		render(
-			<RunConfigForm
-				loadModels={() => models.promise}
-				sessionId="session-2"
-			/>,
+			<RunConfigForm loadModels={() => models.promise} sessionId="session-2" />,
 		);
 
 		const form = controls();

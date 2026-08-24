@@ -48,8 +48,8 @@ export function SessionTree({
 			<h2 className="text-sm font-semibold">Sessions</h2>
 			{tree.length === 0 && (
 				<div className="text-xs text-gray-500">
-					No workspaces in the catalog yet — create one in DSH web. There is
-					no path fallback.
+					No workspaces in the catalog yet — create one in DSH web. There is no
+					path fallback.
 				</div>
 			)}
 			{tree.map((workspace) => {
@@ -79,7 +79,7 @@ export function SessionTree({
 											<button
 												type="button"
 												data-testid={`session-row-${session.id}`}
-												aria-selected={selected}
+												aria-current={selected ? "true" : undefined}
 												onClick={() => onSelect(session.id)}
 												className={
 													"w-full cursor-pointer truncate rounded-md px-2 py-1 text-left font-mono text-xs transition-colors " +

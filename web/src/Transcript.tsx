@@ -92,6 +92,7 @@ function Window({
 				className="flex min-h-[48px] flex-col whitespace-pre-wrap break-words rounded-md border border-slate-200 bg-slate-50 p-1.5 font-mono text-xs"
 			>
 				{lines.map((line, index) => (
+					// biome-ignore lint/suspicious/noArrayIndexKey: lines are an immutable render-only window (no reorder/filter), so the index is a stable key.
 					<Line key={index} line={line} />
 				))}
 			</pre>
@@ -115,7 +116,9 @@ export function Transcript({
 	// (the resumed orchestrator session itself is never driven, so the
 	// question lives in the submitted task, not the stored primary window).
 	const runTaskLine: TranscriptLine[] =
-		isRunSession && runStart.task !== "" ? [{ text: runStart.task, role: "input" }] : [];
+		isRunSession && runStart.task !== ""
+			? [{ text: runStart.task, role: "input" }]
+			: [];
 	// The live lane answers streamed over the socket (kept after the run
 	// ends) are the run session's lane windows. On a run session they
 	// ALWAYS replace the store-read lanes — which would show only the

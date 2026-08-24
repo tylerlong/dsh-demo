@@ -161,17 +161,15 @@ describe("session browser", () => {
 		// its row is highlighted.
 		await waitFor(() =>
 			expect(screen.getByTestId("session-row-session-2")).toHaveAttribute(
-				"aria-selected",
+				"aria-current",
 				"true",
 			),
 		);
-		expect(screen.getByTestId("session-row-session-1")).toHaveAttribute(
-			"aria-selected",
-			"false",
+		expect(screen.getByTestId("session-row-session-1")).not.toHaveAttribute(
+			"aria-current",
 		);
-		expect(screen.getByTestId("session-row-session-3")).toHaveAttribute(
-			"aria-selected",
-			"false",
+		expect(screen.getByTestId("session-row-session-3")).not.toHaveAttribute(
+			"aria-current",
 		);
 
 		// Loaded once on page load, never auto-reloaded.
@@ -189,7 +187,7 @@ describe("session browser", () => {
 
 		await waitFor(() =>
 			expect(screen.getByTestId("session-row-session-2")).toHaveAttribute(
-				"aria-selected",
+				"aria-current",
 				"true",
 			),
 		);
@@ -216,12 +214,11 @@ describe("session browser", () => {
 			expect(primaryOutput()).toHaveTextContent("other session"),
 		);
 		expect(screen.getByTestId("session-row-session-3")).toHaveAttribute(
-			"aria-selected",
+			"aria-current",
 			"true",
 		);
-		expect(screen.getByTestId("session-row-session-2")).toHaveAttribute(
-			"aria-selected",
-			"false",
+		expect(screen.getByTestId("session-row-session-2")).not.toHaveAttribute(
+			"aria-current",
 		);
 		expect(loadTranscript).toHaveBeenNthCalledWith(1, "session-2");
 		expect(loadTranscript).toHaveBeenNthCalledWith(2, "session-3");

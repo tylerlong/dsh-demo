@@ -35,7 +35,9 @@ const TRANSCRIPT: SessionTranscript = {
 	],
 };
 
-function renderTranscript(transcript: SessionTranscript | undefined = TRANSCRIPT) {
+function renderTranscript(
+	transcript: SessionTranscript | undefined = TRANSCRIPT,
+) {
 	return render(
 		<Transcript
 			sessionId="session-1"
@@ -99,7 +101,10 @@ describe("Transcript", () => {
 		render(
 			<Transcript
 				sessionId="session-1"
-				transcript={{ primary: { sessionId: "session-1", lines: [] }, lanes: [] }}
+				transcript={{
+					primary: { sessionId: "session-1", lines: [] },
+					lanes: [],
+				}}
 				loading={false}
 				runStart={{ sessionId: "session-1", task: "what is your ai model?" }}
 				laneTexts={{ left: "left answer", right: "right answer" }}
@@ -186,7 +191,10 @@ describe("Transcript", () => {
 		render(
 			<Transcript
 				sessionId="session-2"
-				transcript={{ primary: { sessionId: "session-2", lines: [] }, lanes: [] }}
+				transcript={{
+					primary: { sessionId: "session-2", lines: [] },
+					lanes: [],
+				}}
 				loading={false}
 				// The run belongs to session-1; session-2 is selected.
 				runStart={{ sessionId: "session-1", task: "what is your ai model?" }}
@@ -202,7 +210,11 @@ describe("Transcript", () => {
 
 	it("renders the pre-selection invite and the empty transcript hint", () => {
 		const { unmount } = render(
-			<Transcript sessionId={undefined} transcript={undefined} loading={false} />,
+			<Transcript
+				sessionId={undefined}
+				transcript={undefined}
+				loading={false}
+			/>,
 		);
 		expect(
 			screen.getByText(/Select a session to view its transcript/),
@@ -213,9 +225,7 @@ describe("Transcript", () => {
 	});
 
 	it("shows the loading placeholder while a read is in flight", () => {
-		render(
-			<Transcript sessionId="s" transcript={undefined} loading={true} />,
-		);
+		render(<Transcript sessionId="s" transcript={undefined} loading={true} />);
 		expect(screen.getByText(/Loading transcript/)).toBeInTheDocument();
 	});
 });

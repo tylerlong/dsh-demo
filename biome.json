@@ -1,11 +1,6 @@
 {
 	"$schema": "https://biomejs.dev/schemas/2.5.8/schema.json",
 	"files": {
-		"includes": [
-			"**",
-			"!web/dist",
-			"!test-results",
-			"!playwright-report"
-		]
+		"includes": ["**", "!web/dist", "!test-results", "!playwright-report"]
 	}
 }

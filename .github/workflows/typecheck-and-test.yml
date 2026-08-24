@@ -30,4 +30,8 @@ jobs:
 
       - run: pnpm typecheck
 
+      # Read-only lint gate: `lint:check` never writes, so CI cannot mask
+      # fixable findings by auto-fixing them.
+      - run: pnpm lint:check
+
       - run: pnpm test

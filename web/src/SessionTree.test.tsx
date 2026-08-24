@@ -112,11 +112,10 @@ describe("SessionTree", () => {
 		);
 
 		const selected = screen.getByTestId("session-row-session-2");
-		expect(selected).toHaveAttribute("aria-selected", "true");
+		expect(selected).toHaveAttribute("aria-current", "true");
 		expect(selected).toHaveClass("bg-blue-100");
-		expect(screen.getByTestId("session-row-session-1")).toHaveAttribute(
-			"aria-selected",
-			"false",
+		expect(screen.getByTestId("session-row-session-1")).not.toHaveAttribute(
+			"aria-current",
 		);
 	});
 

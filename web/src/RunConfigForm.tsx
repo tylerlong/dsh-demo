@@ -21,11 +21,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import type { RunRequest } from "../../shared/protocol.ts";
-import {
-	fetchModels,
-	type ModelOption,
-	type ModelsResponse,
-} from "./api.ts";
+import { fetchModels, type ModelOption, type ModelsResponse } from "./api.ts";
 import { ModelSelect } from "./ModelSelect.tsx";
 
 export interface RunConfigFormProps {

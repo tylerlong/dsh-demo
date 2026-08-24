@@ -41,9 +41,7 @@ export function registerLiveLanes(
 }
 
 /** The live lane refs of one in-progress run's primary session, or empty. */
-export function liveLanesFor(
-	primarySessionId: string,
-): readonly LiveLaneRef[] {
+export function liveLanesFor(primarySessionId: string): readonly LiveLaneRef[] {
 	return liveLaneRegistry.get(primarySessionId) ?? [];
 }
 

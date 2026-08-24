@@ -36,9 +36,9 @@ import type { Agent, AgentHandle } from "@deepseek-ai/dsh-agent";
 import { SessionId } from "@deepseek-ai/dsh-session";
 import type { SubagentResult, SubagentRun } from "@deepseek-ai/dsh-subagent";
 import type { LaneId, RunEvent } from "../shared/protocol.ts";
+import { registerLiveLanes } from "./live-lanes.ts";
 import { convertLlmModels } from "./model-list.ts";
 import type { StartRun } from "./run-factory.ts";
-import { registerLiveLanes } from "./live-lanes.ts";
 import { resolveWorkspace } from "./workspace.ts";
 
 /** The subagent provider that spawns in-process children (see the demos). */
@@ -283,7 +283,9 @@ export function createRunFactory(ctx: Context): StartRun {
 			}
 		})();
 		void flow.catch((error) => {
-			console.error(`harness-workflow: run ${runId} failed: ${messageOf(error)}`);
+			console.error(
+				`harness-workflow: run ${runId} failed: ${messageOf(error)}`,
+			);
 		});
 
 		emit({ type: "run/started", runId });

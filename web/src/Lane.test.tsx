@@ -55,12 +55,7 @@ describe("Lane", () => {
 		);
 
 		rerender(
-			<Lane
-				laneId="left"
-				heading="Left lane"
-				status="canceled"
-				elapsed={4}
-			/>,
+			<Lane laneId="left" heading="Left lane" status="canceled" elapsed={4} />,
 		);
 		expect(screen.getByTestId("lane-left-status")).toHaveTextContent(
 			"canceled · 4s",

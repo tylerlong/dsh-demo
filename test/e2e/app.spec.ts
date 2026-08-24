@@ -110,7 +110,7 @@ async function selectSafeSession(page: Page): Promise<SessionRow> {
 	}
 	await page.getByTestId(`session-row-${target.id}`).click();
 	await expect(page.getByTestId(`session-row-${target.id}`)).toHaveAttribute(
-		"aria-selected",
+		"aria-current",
 		"true",
 	);
 	return target;
@@ -188,7 +188,7 @@ test("preselects the latest session (read-only) and continues a safe session thr
 	expect(latest).toBeDefined();
 	if (latest === undefined) throw new Error("expected a session in the tree");
 	await expect(page.getByTestId(`session-row-${latest.id}`)).toHaveAttribute(
-		"aria-selected",
+		"aria-current",
 		"true",
 	);
 

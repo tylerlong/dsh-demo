@@ -107,9 +107,9 @@ export function App({
 	>(undefined);
 	// Which session the current transcript belongs to; used to keep the prior
 	// window visible during a live refresh (only a selection change blanks it).
-	const [transcriptFor, setTranscriptFor] = useState<string | undefined>(
-		undefined,
-	);
+	// A ref (not state): only the effect reads/writes it, and re-rendering on
+	// its change would re-run the fetch effect.
+	const transcriptForRef = useRef<string | undefined>(undefined);
 
 	// The resizable left-panel width (px). Defaults to w-72 (288px); persisted
 	// to localStorage so the preference survives reloads.
@@ -207,10 +207,11 @@ export function App({
 
 	// Watch the viewed session and read its transcript from the store on
 	// selection change and on every session/updated push (refreshKey).
+	// biome-ignore lint/correctness/useExhaustiveDependencies: refreshKey is a manual refresh trigger incremented on live updates/reconnect; the effect re-runs on it but never reads its value.
 	useEffect(() => {
 		if (selectedSessionId === undefined) {
 			setTranscript(undefined);
-			setTranscriptFor(undefined);
+			transcriptForRef.current = undefined;
 			setTranscriptLoading(false);
 			return;
 		}
@@ -224,7 +225,7 @@ export function App({
 		let cancelled = false;
 		// A selection change blanks the panel (loading); a live refresh keeps
 		// the prior window visible while the fresh store read is in flight.
-		if (transcriptFor !== selectedSessionId) {
+		if (transcriptForRef.current !== selectedSessionId) {
 			setTranscriptLoading(true);
 		}
 		loadTranscriptRef
@@ -234,7 +235,7 @@ export function App({
 					return;
 				}
 				setTranscript(loaded);
-				setTranscriptFor(selectedSessionId);
+				transcriptForRef.current = selectedSessionId;
 				setTranscriptLoading(false);
 			})
 			.catch(() => {
@@ -242,7 +243,7 @@ export function App({
 					return;
 				}
 				setTranscript(undefined);
-				setTranscriptFor(selectedSessionId);
+				transcriptForRef.current = selectedSessionId;
 				setTranscriptLoading(false);
 			});
 		return () => {
@@ -279,6 +280,7 @@ export function App({
 						onSelect={setSelectedSessionId}
 					/>
 				</aside>
+				{/* biome-ignore lint/a11y/useSemanticElements: interactive resizable separator (ARIA separator pattern), not a static <hr>. */}
 				<div
 					role="separator"
 					aria-orientation="vertical"
@@ -286,6 +288,18 @@ export function App({
 					aria-valuenow={sidebarWidth}
 					aria-valuemin={SIDEBAR_WIDTH_MIN}
 					aria-valuemax={SIDEBAR_WIDTH_MAX}
+					tabIndex={0}
+					onKeyDown={(event) => {
+						// Keyboard resize for the focusable separator (ARIA
+						// separator pattern): ArrowLeft narrows, ArrowRight widens.
+						if (event.key === "ArrowLeft") {
+							setSidebarWidth(clampSidebarWidth(sidebarWidth - 16));
+							event.preventDefault();
+						} else if (event.key === "ArrowRight") {
+							setSidebarWidth(clampSidebarWidth(sidebarWidth + 16));
+							event.preventDefault();
+						}
+					}}
 					onPointerDown={(event) => {
 						// Pointer capture keeps the drag alive even if the cursor
 						// leaves the divider mid-drag.
@@ -295,7 +309,7 @@ export function App({
 					onPointerMove={(event) => updateSidebarDrag(event.clientX)}
 					onPointerUp={() => endSidebarDrag()}
 					onPointerCancel={() => endSidebarDrag()}
-					className="w-1.5 shrink-0 cursor-col-resize touch-none border-r border-slate-200 hover:border-blue-400"
+					className="w-1.5 shrink-0 cursor-col-resize touch-none border-r border-slate-200 hover:border-blue-400 focus:border-blue-400 focus:outline-none"
 				/>
 				<div className="flex min-w-0 flex-1 justify-center">
 					<div className="flex w-full max-w-5xl flex-col gap-6 px-6 py-6">

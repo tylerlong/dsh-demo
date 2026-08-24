@@ -24,7 +24,6 @@ const baseRequest = () => ({
 	sessionId: "session-seam-test",
 });
 
-
 /** Grab the latest run or fail the test; the factory always has one here. */
 function lastRun(factory: ReturnType<typeof createScriptedRunFactory>) {
 	const run = factory.lastRun;
@@ -93,7 +92,10 @@ describe("run-factory seam", () => {
 
 	it("carries the session id in the request", () => {
 		const factory = createScriptedRunFactory();
-		factory.startRun({ ...baseRequest(), sessionId: "session-other" }, () => {});
+		factory.startRun(
+			{ ...baseRequest(), sessionId: "session-other" },
+			() => {},
+		);
 		expect(factory.lastRun?.request.sessionId).toBe("session-other");
 	});
 
