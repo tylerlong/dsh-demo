@@ -344,8 +344,10 @@ describe("loadSessionsFromContext projection-cache reads", () => {
 		});
 		const load = loadSessionsFromContext(ctx as never);
 		const tree = await load();
+		// The unreadable session has no stored title, so it labels by the cwd
+		// folder basename (DSH displayTitleOf), never "Untitled session".
 		expect(tree[0].sessions).toEqual([
-			{ id: "s3", label: "Untitled session", updatedAt: 300 },
+			{ id: "s3", label: "ws", updatedAt: 300 },
 		]);
 	});
 

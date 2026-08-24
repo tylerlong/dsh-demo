@@ -37,16 +37,16 @@
 /** The top-N most-recent sessions shown per workspace (ticket #45). */
 export const TOP_SESSIONS_PER_WORKSPACE = 5; // DSH web COLLAPSED_SESSION_LIMIT
 
-/** Minimal placeholder label for a session with no stored title. */
-export const SESSION_LABEL_PLACEHOLDER = "Untitled session";
-
-/** One session row under a workspace in the tree. */
+/**
+ * One session row under a workspace in the tree.
+ */
 export interface SessionRow {
 	/** The session's id. */
 	readonly id: string;
 	/**
-	 * The session's readable label: its stored title from the store's
-	 * projection read face when one is set, else {@link SESSION_LABEL_PLACEHOLDER}.
+	 * The session's display label: its stored title when one is set, else the
+	 * workspace folder basename, else the raw id — DSH web's displayTitleOf.
+	 * There is no "Untitled session" placeholder.
 	 */
 	readonly label: string;
 	/** Unix epoch milliseconds of last activity (max(createdAt, last user prompt), matching DSH web updatedAt). */
@@ -74,6 +74,8 @@ export interface WorkspaceRegistryLike {
 		readonly title: string;
 		readonly sessionIds: readonly string[];
 	}[];
+	/** Registry-global archive set: sessions hidden from every grouping surface. */
+	readonly archivedSessionIds: readonly string[];
 }
 
 /**
@@ -81,11 +83,12 @@ export interface WorkspaceRegistryLike {
  * header exposes the already-available fields the enriched tree requires: the
  * session's updatedAt (folded in the loader, matching DSH web updatedAt), its
  * origin marker (subagent children are filtered out), its blank marker (a
- * session with no turn ever ran, matching DSH web sessionVisible), and its
- * stored label (the store's title projection read face) when one is set.
+ * session with no turn ever ran, matching DSH web sessionVisible), its stored
+ * label (the store's title projection read face) when one is set, and its cwd
+ * (the label fallback's folder basename, matching DSH web displayTitleOf).
  */
 export interface SessionStoreLike {
-	/** Lightweight listing from metadata; headers carry updatedAt, origin, blank, label. */
+	/** Lightweight listing from metadata; headers carry updatedAt, origin, blank, label, cwd. */
 	list(): Promise<
 		readonly {
 			readonly id: string;
@@ -93,16 +96,29 @@ export interface SessionStoreLike {
 			readonly origin?: "subagent";
 			readonly blank?: boolean;
 			readonly label?: string;
+			readonly cwd?: string;
 		}[]
 	>;
+}
+
+/** The folder basename of a cwd (DSH web workspaceTitleOf), or undefined. */
+function cwdBasename(cwd: string | undefined): string | undefined {
+	if (cwd === undefined || cwd === "") return undefined;
+	const base = cwd
+		.replace(/[/\\]+$/, "")
+		.split(/[/\\]/)
+		.pop();
+	return base === undefined || base === "" ? undefined : base;
 }
 
 /**
  * Build the session tree for the server from the shared registry + session
  * store, mirroring DSH web grouped Updated view. Workspaces keep the durable
- * registry order; within each, sessions (non-subagent, non-blank) are ordered
- * by updatedAt descending (ties by id, like DSH web byRecency) and capped at
- * TOP_SESSIONS_PER_WORKSPACE. Strictly read-only: only registry.list() and
+ * registry order; within each, sessions (non-subagent, non-blank, non-archived)
+ * are ordered by updatedAt descending (ties by id, like DSH web byRecency) and
+ * capped at TOP_SESSIONS_PER_WORKSPACE. Each row labels by stored title, else
+ * workspace folder basename, else id (DSH web displayTitleOf). Strictly
+ * read-only: only registry.list(), registry.archivedSessionIds, and
  * sessions.list(), never a mutation. Sessions listed by the registry but
  * absent from the store are omitted — the store is the source of the
  * read-only listing.
@@ -118,13 +134,16 @@ export async function convertSessionTree(
 	}
 	// Workspaces keep the durable registry order (registry.list() returns the
 	// workspaceIds sequence) — never re-sorted by date, matching DSH web.
-	return registry.list().map((workspace) => {
-		// Only top-level, non-blank conversations are shown: subagent children
-		// (the lane workers every run spawns) and blank sessions (no turn ever
-		// ran) never appear in the panel. This drops every blank session — unlike
-		// DSH web's sessionVisible, which keeps the current/provisional blank
-		// "New Session" row, because this read-only listing has no such row of
-		// its own; the filter's shape otherwise matches sessionVisible.
+	const workspaces = registry.list();
+	const archived = new Set(registry.archivedSessionIds);
+	return workspaces.map((workspace) => {
+		// Only top-level, non-blank, non-archived conversations are shown:
+		// subagent children (the lane workers every run spawns), blank sessions
+		// (no turn ever ran), and archived sessions never appear in the panel.
+		// This drops every blank session — unlike DSH web's sessionVisible,
+		// which keeps the current/provisional blank "New Session" row, because
+		// this read-only listing has no such row of its own; the filter's shape
+		// otherwise matches sessionVisible.
 		const rows: SessionRow[] = [];
 		for (const sessionId of workspace.sessionIds) {
 			const header = byId.get(sessionId);
@@ -132,12 +151,16 @@ export async function convertSessionTree(
 				// Listed by the registry but absent from the store: omitted.
 				continue;
 			}
-			if (header.origin === "subagent" || header.blank) {
+			if (
+				header.origin === "subagent" ||
+				header.blank ||
+				archived.has(sessionId)
+			) {
 				continue;
 			}
 			rows.push({
 				id: sessionId,
-				label: header.label ?? SESSION_LABEL_PLACEHOLDER,
+				label: header.label ?? cwdBasename(header.cwd) ?? sessionId,
 				updatedAt: header.updatedAt,
 			});
 		}

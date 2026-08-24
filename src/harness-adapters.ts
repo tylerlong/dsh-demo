@@ -279,6 +279,7 @@ export function loadSessionsFromContext(
 						updatedAt: Math.max(header.createdAt, metadata?.lastPromptAt ?? 0),
 						blank: metadata?.blank ?? false,
 						origin: header.origin,
+						cwd: header.cwd,
 						label: title ?? undefined,
 					};
 				}
@@ -289,6 +290,7 @@ export function loadSessionsFromContext(
 					updatedAt: fold?.updatedAt ?? header.createdAt,
 					blank: fold?.blank ?? false,
 					origin: header.origin,
+					cwd: header.cwd,
 					label: labels.get(header.id),
 				};
 			});

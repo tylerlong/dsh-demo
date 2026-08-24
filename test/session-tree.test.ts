@@ -31,6 +31,7 @@ function fakeRegistry(
 		readonly title: string;
 		readonly sessionIds: readonly string[];
 	}[],
+	archivedSessionIds: readonly string[] = [],
 ): {
 	readonly calls: readonly string[];
 	readonly registry: Parameters<typeof convertSessionTree>[0];
@@ -42,6 +43,10 @@ function fakeRegistry(
 			list() {
 				calls.push("registry.list");
 				return workspaces;
+			},
+			get archivedSessionIds() {
+				calls.push("registry.archivedSessionIds");
+				return archivedSessionIds;
 			},
 			// Mutation surface DSH web owns; the seam must never reach it.
 			create() {
@@ -75,6 +80,7 @@ function fakeStore(
 		readonly origin?: "subagent";
 		readonly blank?: boolean;
 		readonly label?: string;
+		readonly cwd?: string;
 	}[],
 ): {
 	readonly calls: readonly string[];
@@ -158,13 +164,13 @@ function fakeTranscriptStore(
 }
 
 describe("session tree seam", () => {
-	it("yields a two-level tree with each session labeled (stored label, else placeholder)", async () => {
+	it("labels each session by stored title, else workspace folder basename, else id (no placeholder)", async () => {
 		const { registry } = fakeRegistry([
 			{
 				id: "ws-alpha",
 				path: "/opt/alpha-project",
 				title: "Alpha",
-				sessionIds: ["session-1", "session-2"],
+				sessionIds: ["session-1", "session-2", "session-3"],
 			},
 			{
 				id: "ws-empty",
@@ -180,16 +186,69 @@ describe("session tree seam", () => {
 				updatedAt: 1700000000000,
 				label: "Alpha primary",
 			},
-			{ id: "session-2", createdAt: 1700000000000, updatedAt: 1700000500000 },
+			{
+				id: "session-2",
+				createdAt: 1700000000000,
+				updatedAt: 1700000500000,
+				cwd: "/opt/alpha-project",
+			},
+			{
+				id: "session-3",
+				createdAt: 1700000000000,
+				updatedAt: 1700000600000,
+			},
 		]);
 
 		const tree = await convertSessionTree(registry, store);
 
-		// A stored label is surfaced; a session without one gets the placeholder.
-		// (Sessions are ordered by updatedAt desc, so session-2 leads.)
+		// title → cwd basename → id; no "Untitled session" placeholder.
+		// (Sessions are ordered by updatedAt desc, so session-3 leads.)
 		expect(tree[0]?.sessions).toEqual([
-			{ id: "session-2", label: "Untitled session", updatedAt: 1700000500000 },
+			{ id: "session-3", label: "session-3", updatedAt: 1700000600000 },
+			{ id: "session-2", label: "alpha-project", updatedAt: 1700000500000 },
 			{ id: "session-1", label: "Alpha primary", updatedAt: 1700000000000 },
+		]);
+	});
+
+	it("falls back to the folder basename only when no stored title is set", async () => {
+		const { registry } = fakeRegistry([
+			{
+				id: "ws-alpha",
+				path: "/opt/alpha-project",
+				title: "Alpha",
+				sessionIds: ["with-title", "with-cwd", "trailing-slash"],
+			},
+		]);
+		const { store } = fakeStore([
+			{
+				id: "with-title",
+				createdAt: 1700000000000,
+				updatedAt: 1700000000000,
+				label: "Stored title",
+				cwd: "/opt/alpha-project",
+			},
+			{
+				id: "with-cwd",
+				createdAt: 1700000000000,
+				updatedAt: 1700000100000,
+				cwd: "/opt/alpha-project/sub",
+			},
+			{
+				id: "trailing-slash",
+				createdAt: 1700000000000,
+				updatedAt: 1700000200000,
+				cwd: "/opt/alpha-project/",
+			},
+		]);
+
+		const tree = await convertSessionTree(registry, store);
+
+		// A stored title wins over the cwd basename; a trailing slash is
+		// stripped; the deepest folder basename is used.
+		expect(tree[0]?.sessions.map((s) => s.label)).toEqual([
+			"alpha-project",
+			"sub",
+			"Stored title",
 		]);
 	});
 
@@ -286,7 +345,41 @@ describe("session tree seam", () => {
 
 		// The blank session never ran a turn; it is hidden like DSH web hides it.
 		expect(tree[0]?.sessions).toEqual([
-			{ id: "active", label: "Untitled session", updatedAt: 1700000500000 },
+			{ id: "active", label: "active", updatedAt: 1700000500000 },
+		]);
+	});
+
+	it("hides archived sessions via the registry's archived ids", async () => {
+		const { registry } = fakeRegistry(
+			[
+				{
+					id: "ws-alpha",
+					path: "/opt/alpha-project",
+					title: "Alpha",
+					sessionIds: ["active", "archived-one", "archived-two"],
+				},
+			],
+			["archived-one", "archived-two"],
+		);
+		const { store } = fakeStore([
+			{ id: "active", createdAt: 1700000000000, updatedAt: 1700000500000 },
+			{
+				id: "archived-one",
+				createdAt: 1700000000000,
+				updatedAt: 1700000600000,
+			},
+			{
+				id: "archived-two",
+				createdAt: 1700000000000,
+				updatedAt: 1700000700000,
+			},
+		]);
+
+		const tree = await convertSessionTree(registry, store);
+
+		// Archived sessions never appear, even though they are the most recent.
+		expect(tree[0]?.sessions).toEqual([
+			{ id: "active", label: "active", updatedAt: 1700000500000 },
 		]);
 	});
 
@@ -324,11 +417,11 @@ describe("session tree seam", () => {
 		const tree = await convertSessionTree(registry, store);
 
 		expect(tree[0]?.sessions).toEqual([
-			{ id: "session-1", label: "Untitled session", updatedAt: 1700000000000 },
+			{ id: "session-1", label: "session-1", updatedAt: 1700000000000 },
 		]);
 	});
 
-	it("is strictly read-only: only registry.list() and store.list() are called", async () => {
+	it("is strictly read-only: only registry.list(), registry.archivedSessionIds, and store.list() are called", async () => {
 		const { registry, calls: registryCalls } = fakeRegistry([
 			{
 				id: "ws-alpha",
@@ -343,7 +436,10 @@ describe("session tree seam", () => {
 
 		await convertSessionTree(registry, store);
 
-		expect(registryCalls).toEqual(["registry.list"]);
+		expect(registryCalls).toEqual([
+			"registry.list",
+			"registry.archivedSessionIds",
+		]);
 		expect(storeCalls).toEqual(["store.list"]);
 	});
 });
