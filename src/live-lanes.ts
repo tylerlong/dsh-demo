@@ -15,8 +15,6 @@
  * or cancel). Strictly an ephemeral read-side index — it never mutates any
  * session.
  */
-export const LIVE_LANE_LIMIT = 2;
-
 /** One live lane-worker of an in-progress run, keyed by its child session. */
 export interface LiveLaneRef {
 	/** Which lane this worker is ("left" | "right"). */

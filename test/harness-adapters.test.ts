@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { liveLanesFor, registerLiveLanes } from "../src/live-lanes.ts";
+import { registerLiveLanes } from "../src/live-lanes.ts";
 import { loadTranscriptFromContext } from "../src/harness-adapters.ts";
 import type { TranscriptEvent } from "../src/session-transcript.ts";
 
