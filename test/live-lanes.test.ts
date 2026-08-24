@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { liveLanesFor, registerLiveLanes } from "../src/live-lanes.ts";
-import { loadTranscriptFromContext } from "../src/harness-adapters.ts";
 
 describe("live-lanes registry", () => {
   it("registers and unregisters lane refs", () => {
