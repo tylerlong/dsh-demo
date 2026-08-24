@@ -38,6 +38,7 @@ import type { SubagentResult, SubagentRun } from "@deepseek-ai/dsh-subagent";
 import type { LaneId, RunEvent } from "../shared/protocol.ts";
 import { convertLlmModels } from "./model-list.ts";
 import type { StartRun } from "./run-factory.ts";
+import { registerLiveLanes } from "./live-lanes.ts";
 import { resolveWorkspace } from "./workspace.ts";
 
 /** The subagent provider that spawns in-process children (see the demos). */
@@ -172,6 +173,9 @@ export function createRunFactory(ctx: Context): StartRun {
 					toolFilter: { allow: WORKER_TOOLS },
 				});
 				workerRuns.push(run);
+				const unregisterLive = registerLiveLanes(request.sessionId, [
+					{ laneId: lane, workerSessionId: run.id },
+				]);
 				const stopWatching = watchSession(ctx, run.id, (text) => {
 					if (!controller.signal.aborted) {
 						emit({ type: "lane/worker/delta", laneId: lane, text });
@@ -188,6 +192,7 @@ export function createRunFactory(ctx: Context): StartRun {
 					emit({ type: "lane/worker/error", laneId: lane, reason });
 				} finally {
 					stopWatching();
+					unregisterLive();
 					// Dispose exactly once: drop the run from the shared list
 					// first, so disposeAll() (cancel / flow teardown) never
 					// disposes an already-settled run again.
