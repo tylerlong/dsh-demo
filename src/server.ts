@@ -28,8 +28,7 @@ import { WS_PATH } from "../shared/protocol.ts";
 import type { ModelOption } from "./model-list.ts";
 import { resolveDefaults } from "./model-list.ts";
 import type { RunHandle, StartRun } from "./run-factory.ts";
-import type { SessionTranscript } from "./session-transcript.ts";
-import { TRANSCRIPT_WINDOW_LIMIT_MAX } from "./session-transcript.ts";
+import type { SessionTranscript, TranscriptPair } from "./session-transcript.ts";
 import type { WorkspaceNode } from "./session-tree.ts";
 
 /** Re-export the dropdown option shape the /api/models endpoint serves. */
@@ -71,17 +70,18 @@ export interface ServerOptions {
 		| readonly WorkspaceNode[];
 	/**
 	 * Inject the read-only transcript read (ticket #38, child #46): one
-	 * selected session's recent prompt/answer window — primary-only, with
+	 * selected session's shown prompt/answer pair — primary-only, with
 	 * per-line roles, plus (when our own run is live) the in-memory lane
-	 * windows (see session-transcript.ts). `limit` sizes the primary window
-	 * (the last N prompt/answer pairs; undefined = the default one-pair
-	 * window), so the page can grow it backward via "load more". Production
-	 * passes a loader backed by the booted context; tests inject a fixed read.
-	 * Backs GET /api/sessions/:id/transcript.
+	 * windows (see session-transcript.ts). `pair` selects the shown pair
+	 * (1-indexed, or "last" for the newest; undefined = "last"), and the
+	 * response reports `currentPair`/`pairCount` so the page can navigate
+	 * first/prev/next/last. Production passes a loader backed by the booted
+	 * context; tests inject a fixed read. Backs
+	 * GET /api/sessions/:id/transcript.
 	 */
 	readonly loadTranscript: (
 		sessionId: string,
-		limit?: number,
+		pair?: TranscriptPair,
 	) => Promise<SessionTranscript> | SessionTranscript;
 	/**
 	 * Inject the run factory (ticket #4): the server's only dependency on
@@ -158,21 +158,22 @@ async function readAsset(file: string): Promise<Buffer | undefined> {
 }
 
 /**
- * Parse the optional ?limit= window size of a transcript request. Returns the
- * requested prompt/answer pair count clamped to [1, TRANSCRIPT_WINDOW_LIMIT_MAX],
- * or undefined when absent or malformed (the loader then uses its default
- * one-pair window). A non-positive or non-numeric value is treated as absent,
- * never as a zero-pair (or negative) window.
+ * Parse the optional ?pair= selector of a transcript request. Returns a
+ * 1-indexed pair number, "last" for the newest pair, or undefined when absent
+ * or malformed (the loader then uses its default "last" view). A non-positive
+ * or non-numeric value is treated as absent, never as a zero-pair (or
+ * negative) selection.
  */
-function transcriptLimitFrom(url: string | undefined): number | undefined {
+function transcriptPairFrom(url: string | undefined): TranscriptPair | undefined {
 	const query = url?.split("?", 2)[1];
 	if (query === undefined) return undefined;
-	for (const pair of query.split("&")) {
-		const [key, value] = pair.split("=", 2);
-		if (key !== "limit") continue;
+	for (const part of query.split("&")) {
+		const [key, value] = part.split("=", 2);
+		if (key !== "pair") continue;
+		if (value === "last") return "last";
 		const parsed = Number.parseInt(value ?? "", 10);
 		if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
-		return Math.min(parsed, TRANSCRIPT_WINDOW_LIMIT_MAX);
+		return parsed;
 	}
 	return undefined;
 }
@@ -480,14 +481,15 @@ async function handleRequest(
 	);
 	if (method === "GET" && transcriptMatch !== null) {
 		// The read-only transcript read for one selected session: the primary
-		// session's own recent prompt/answer window (child #46), each line
-		// tagged with its role, with live lane windows supplied when a run is
-		// active. An optional ?limit=N grows the window to the last N pairs
-		// ("load more"), clamped to the seam's payload bound.
+		// session's own shown prompt/answer pair (child #46), each line tagged
+		// with its role, with live lane windows supplied when a run is active.
+		// An optional ?pair=N (or ?pair=last) selects the shown pair; the
+		// response reports currentPair/pairCount for first/prev/next/last
+		// navigation.
 		const sessionId = decodeURIComponent(transcriptMatch[1] ?? "");
 		const transcript = await options.loadTranscript(
 			sessionId,
-			transcriptLimitFrom(req.url),
+			transcriptPairFrom(req.url),
 		);
 		res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
 		res.end(JSON.stringify(transcript));

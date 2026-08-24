@@ -22,8 +22,8 @@
  * the existing look is converted to utility classes as the components land.
  */
 import { useEffect, useRef, useState } from "react";
-import type { SessionTranscript, SessionTree } from "./api.ts";
-import { fetchSessions, fetchTranscript, TRANSCRIPT_LOAD_STEP } from "./api.ts";
+import type { SessionTranscript, SessionTree, TranscriptPair } from "./api.ts";
+import { fetchSessions, fetchTranscript } from "./api.ts";
 import { Lane } from "./Lane.tsx";
 import { RunConfigForm, type RunConfigFormProps } from "./RunConfigForm.tsx";
 import { SessionTree as SessionTreePanel } from "./SessionTree.tsx";
@@ -57,13 +57,13 @@ export interface AppProps {
 	readonly loadSessions?: () => Promise<SessionTree>;
 	/**
 	 * Load one session's transcript from the store; defaults to the
-	 * /api/sessions/:id/transcript fetch. `limit` sizes the primary window
-	 * (the last N prompt/answer pairs), so "load more" grows it backward one
-	 * pair at a time. Tests inject a fake.
+	 * /api/sessions/:id/transcript fetch. `pair` selects the shown pair
+	 * (1-indexed, or "last" for the newest), so the page can navigate
+	 * first/prev/next/last. Tests inject a fake.
 	 */
 	readonly loadTranscript?: (
 		sessionId: string,
-		limit?: number,
+		pair?: TranscriptPair,
 	) => Promise<SessionTranscript>;
 }
 
@@ -103,12 +103,11 @@ export function App({
 	);
 	const [transcriptLoading, setTranscriptLoading] = useState(false);
 	const [refreshKey, setRefreshKey] = useState(0);
-	// The primary window size requested from the store (the last N prompt/
-	// answer pairs). Defaults to one pair — the most recent prompt plus its
-	// answer. "Load more" grows it by TRANSCRIPT_LOAD_STEP; a session change
-	// resets it to the default window so a new selection never inherits
-	// another session's pagination.
-	const [transcriptLimit, setTranscriptLimit] = useState(TRANSCRIPT_LOAD_STEP);
+	// The shown prompt/answer pair requested from the store. Defaults to "last"
+	// (the newest pair). first/prev/next/last navigation sets it to a specific
+	// pair number; a session change resets it to "last" so a new selection
+	// never inherits another session's position.
+	const [transcriptPair, setTranscriptPair] = useState<TranscriptPair>("last");
 	// The most recent run that actually began, bound to its session: the
 	// submitted task (shown as that session's primary input line) and the
 	// session the lane answers belong to. Keyed by session so switching
@@ -169,7 +168,7 @@ export function App({
 	// another session's pagination).
 	const selectSession = (sessionId: string): void => {
 		setSelectedSessionId(sessionId);
-		setTranscriptLimit(TRANSCRIPT_LOAD_STEP);
+		setTranscriptPair("last");
 	};
 
 	const run = useRun({
@@ -224,9 +223,9 @@ export function App({
 		};
 	}, []);
 
-	// Watch the viewed session and read its transcript from the store on
+	// Watch the viewed session and read its shown pair from the store on
 	// selection change, on every session/updated push (refreshKey), and on
-	// every "load more" (transcriptLimit grows the window).
+	// every first/prev/next/last navigation (transcriptPair selects the pair).
 	// biome-ignore lint/correctness/useExhaustiveDependencies: refreshKey is a manual refresh trigger incremented on live updates/reconnect; the effect re-runs on it but never reads its value.
 	useEffect(() => {
 		if (selectedSessionId === undefined) {
@@ -244,13 +243,13 @@ export function App({
 		}
 		let cancelled = false;
 		// A selection change blanks the panel (loading); a live refresh or a
-		// "load more" keeps the prior window visible while the fresh store
-		// read is in flight.
+		// navigation keeps the prior pair visible while the fresh store read
+		// is in flight.
 		if (transcriptForRef.current !== selectedSessionId) {
 			setTranscriptLoading(true);
 		}
 		loadTranscriptRef
-			.current(selectedSessionId, transcriptLimit)
+			.current(selectedSessionId, transcriptPair)
 			.then((loaded) => {
 				if (cancelled) {
 					return;
@@ -270,7 +269,7 @@ export function App({
 		return () => {
 			cancelled = true;
 		};
-	}, [selectedSessionId, refreshKey, transcriptLimit]);
+	}, [selectedSessionId, refreshKey, transcriptPair]);
 
 	return (
 		<div className="min-h-screen bg-slate-100 text-slate-900">
@@ -357,9 +356,16 @@ export function App({
 							loading={transcriptLoading}
 							laneTexts={run.laneTexts}
 							runStart={runStart}
-							onLoadMore={() =>
-								setTranscriptLimit((limit) => limit + TRANSCRIPT_LOAD_STEP)
+							onFirst={() => setTranscriptPair(1)}
+							onPrev={() =>
+								setTranscriptPair(
+									Math.max((transcript?.currentPair ?? 1) - 1, 1),
+								)
 							}
+							onNext={() =>
+								setTranscriptPair((transcript?.currentPair ?? 0) + 1)
+							}
+							onLast={() => setTranscriptPair("last")}
 						/>
 						<section
 							aria-label="Run"

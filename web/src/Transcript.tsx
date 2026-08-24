@@ -16,9 +16,10 @@
  * each get a distinct background; every other line (tool/step/system) keeps
  * the default panel style — there is no third background.
  *
- * Pagination: while the store read reports more prompt/answer pairs before
- * the primary window (moreBefore), a "Load more" button at the top grows the
- * window by one pair (the last N+1 pairs) via onLoadMore.
+ * Navigation: the transcript shows exactly one prompt/answer pair at a time.
+ * Four buttons (First / Prev / Next / Last) move between pairs; First and
+ * Prev are disabled on the oldest pair, Next and Last on the newest, all
+ * four disabled when the session has a single pair (or none).
  */
 import type { ReactNode } from "react";
 import type { LaneId } from "../../shared/protocol.ts";
@@ -55,12 +56,25 @@ export interface TranscriptProps {
 	 */
 	readonly runStart?: { sessionId: string; task: string } | undefined;
 	/**
-	 * Grow the primary window by one prompt/answer pair (the last N+1 pairs).
-	 * Rendered as a "Load more" button at the top of the transcript while the
-	 * store read reports more pairs before the current window (moreBefore);
-	 * absent when there is nothing more to load.
+	 * Navigate to the first pair. Rendered as a "First" button; disabled when
+	 * the shown pair is already the first (or the session has no pairs).
 	 */
-	readonly onLoadMore?: () => void;
+	readonly onFirst?: () => void;
+	/**
+	 * Navigate to the previous pair. Rendered as a "Prev" button; disabled on
+	 * the first pair (or when there are no pairs).
+	 */
+	readonly onPrev?: () => void;
+	/**
+	 * Navigate to the next pair. Rendered as a "Next" button; disabled on the
+	 * last pair (or when there are no pairs).
+	 */
+	readonly onNext?: () => void;
+	/**
+	 * Navigate to the last (newest) pair. Rendered as a "Last" button; disabled
+	 * when the shown pair is already the last (or there are no pairs).
+	 */
+	readonly onLast?: () => void;
 }
 
 /** One line's background class for its role (input/output styled; default). */
@@ -118,27 +132,78 @@ export function Transcript({
 	loading,
 	laneTexts,
 	runStart,
-	onLoadMore,
+	onFirst,
+	onPrev,
+	onNext,
+	onLast,
 }: TranscriptProps) {
 	// A run's live content (its task + lane answers) belongs only to the
 	// session it was submitted on; a different selection shows only that
 	// session's store transcript.
 	const isRunSession =
 		runStart !== undefined && runStart.sessionId === sessionId;
-	// "Load more" appears at the top while the store read reports more pairs
-	// before the primary window (and the page can actually grow it).
-	const canLoadMore =
-		transcript?.moreBefore === true && onLoadMore !== undefined;
-	const loadMoreButton = canLoadMore ? (
-		<button
-			type="button"
-			data-testid="transcript-load-more"
-			onClick={onLoadMore}
-			className="self-center rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-800"
-		>
-			Load more
-		</button>
-	) : null;
+	// Navigation bounds come from the shown pair's position: First/Prev are
+	// enabled only when there is an earlier pair, Next/Last only when there is
+	// a later one (a callback is required to act on the press).
+	const currentPair = transcript?.currentPair ?? 0;
+	const pairCount = transcript?.pairCount ?? 0;
+	const canGoEarlier = currentPair > 1;
+	const canGoLater = currentPair < pairCount;
+	const canFirst = canGoEarlier && onFirst !== undefined;
+	const canPrev = canGoEarlier && onPrev !== undefined;
+	const canNext = canGoLater && onNext !== undefined;
+	const canLast = canGoLater && onLast !== undefined;
+	const navButtonClass =
+		"rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-600 enabled:hover:bg-slate-100 enabled:hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-40";
+	const navButtons =
+		sessionId !== undefined ? (
+			<div className="flex items-center justify-center gap-2">
+				<button
+					type="button"
+					data-testid="transcript-first"
+					disabled={!canFirst}
+					onClick={onFirst}
+					className={navButtonClass}
+				>
+					First
+				</button>
+				<button
+					type="button"
+					data-testid="transcript-prev"
+					disabled={!canPrev}
+					onClick={onPrev}
+					className={navButtonClass}
+				>
+					Prev
+				</button>
+				<span
+					data-testid="transcript-position"
+					className="px-2 text-xs text-slate-500"
+				>
+					{pairCount > 0
+						? `${currentPair} / ${pairCount}`
+						: "no pairs"}
+				</span>
+				<button
+					type="button"
+					data-testid="transcript-next"
+					disabled={!canNext}
+					onClick={onNext}
+					className={navButtonClass}
+				>
+					Next
+				</button>
+				<button
+					type="button"
+					data-testid="transcript-last"
+					disabled={!canLast}
+					onClick={onLast}
+					className={navButtonClass}
+				>
+					Last
+				</button>
+			</div>
+		) : null;
 	// The submitted task of our own run shows as the primary's input line
 	// (the resumed orchestrator session itself is never driven, so the
 	// question lives in the submitted task, not the stored primary window).
@@ -240,7 +305,7 @@ export function Transcript({
 					</span>
 				)}
 			</div>
-			{loadMoreButton}
+			{navButtons}
 			{body}
 		</section>
 	);

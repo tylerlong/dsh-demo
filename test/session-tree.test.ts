@@ -17,7 +17,6 @@
 import { describe, expect, it } from "vitest";
 import {
 	convertSessionTranscript,
-	TRANSCRIPT_WINDOW_PAIRS,
 	type TranscriptEvent,
 	type TranscriptWindow,
 } from "../src/session-transcript.ts";
@@ -610,9 +609,8 @@ describe("session transcript seam", () => {
 		expect(transcript.lanes).toEqual([]);
 	});
 
-	it("keeps only the recent one prompt/answer pair when more pairs exist", async () => {
-		// Three full pairs (prompt + answer each), so the default one-pair
-		// window shows only the newest pair.
+	it("shows the newest pair by default and reports the session's pair count", async () => {
+		// Three full pairs (prompt + answer each).
 		const { store } = fakeTranscriptStore({
 			"session-primary": [
 				messageEvent("user/message", "prompt one"),
@@ -626,17 +624,17 @@ describe("session transcript seam", () => {
 
 		const transcript = await convertSessionTranscript(store, "session-primary");
 
-		// The newest pair only: prompt three + answer three.
+		// The default view is the newest pair, and the position/count enable
+		// First/Prev (and disable Next/Last).
 		expect(transcript.primary.lines).toEqual([
 			{ text: "prompt three", role: "input" },
 			{ text: "answer three", role: "output" },
 		]);
-		// More pairs exist before the window, so the page can offer "load more".
-		expect(transcript.moreBefore).toBe(true);
+		expect(transcript.currentPair).toBe(3);
+		expect(transcript.pairCount).toBe(3);
 	});
 
-	it("grows the window backward by the requested pair limit (load more)", async () => {
-		// Three pairs, request the last two.
+	it("loads a specific pair by index across first/next/last", async () => {
 		const { store } = fakeTranscriptStore({
 			"session-primary": [
 				messageEvent("user/message", "prompt one"),
@@ -648,39 +646,94 @@ describe("session transcript seam", () => {
 			],
 		});
 
-		const transcript = await convertSessionTranscript(
+		// First pair: First/Prev disabled, Next/Last enabled.
+		const first = await convertSessionTranscript(
 			store,
 			"session-primary",
 			[],
-			TRANSCRIPT_WINDOW_PAIRS + 1,
+			1,
 		);
+		expect(first.primary.lines).toEqual([
+			{ text: "prompt one", role: "input" },
+			{ text: "answer one", role: "output" },
+		]);
+		expect(first.currentPair).toBe(1);
+		expect(first.pairCount).toBe(3);
 
-		// The last two pairs, in order.
-		expect(transcript.primary.lines).toEqual([
+		// Middle pair: everything enabled.
+		const middle = await convertSessionTranscript(
+			store,
+			"session-primary",
+			[],
+			2,
+		);
+		expect(middle.primary.lines).toEqual([
 			{ text: "prompt two", role: "input" },
 			{ text: "answer two", role: "output" },
+		]);
+		expect(middle.currentPair).toBe(2);
+
+		// "last": the newest pair, same as the default.
+		const last = await convertSessionTranscript(
+			store,
+			"session-primary",
+			[],
+			"last",
+		);
+		expect(last.currentPair).toBe(3);
+		expect(last.primary.lines).toEqual([
 			{ text: "prompt three", role: "input" },
 			{ text: "answer three", role: "output" },
 		]);
-		// 3 stored pairs > 2 requested: more pairs remain before the window.
-		expect(transcript.moreBefore).toBe(true);
 	});
 
-	it("reports moreBefore=false when the whole transcript fits the window", async () => {
+	it("clamps an out-of-range pair index into the session", async () => {
 		const { store } = fakeTranscriptStore({
 			"session-primary": [
-				messageEvent("user/message", "only prompt"),
-				messageEvent("assistant/message", "only answer"),
+				messageEvent("user/message", "prompt one"),
+				messageEvent("assistant/message", "answer one"),
+				messageEvent("user/message", "prompt two"),
+				messageEvent("assistant/message", "answer two"),
+			],
+		});
+
+		// Below the first pair clamps to pair 1; above the last clamps to the
+		// last pair.
+		const low = await convertSessionTranscript(store, "session-primary", [], 0);
+		expect(low.currentPair).toBe(1);
+		const high = await convertSessionTranscript(
+			store,
+			"session-primary",
+			[],
+			9,
+		);
+		expect(high.currentPair).toBe(2);
+		expect(high.pairCount).toBe(2);
+	});
+
+	it("reports no pairs (0 / 0) for an empty session", async () => {
+		const { store } = fakeTranscriptStore({
+			"session-primary": [
+				messageEvent("assistant/message", "orphan without a prompt"),
 			],
 		});
 
 		const transcript = await convertSessionTranscript(store, "session-primary");
 
-		expect(transcript.primary.lines).toEqual([
-			{ text: "only prompt", role: "input" },
-			{ text: "only answer", role: "output" },
-		]);
-		expect(transcript.moreBefore).toBe(false);
+		// One pair even when it has no preceding prompt.
+		expect(transcript.currentPair).toBe(1);
+		expect(transcript.pairCount).toBe(1);
+
+		const empty = fakeTranscriptStore({
+			"session-primary": [nonMessageEvent("turn/start")],
+		});
+		const noPairs = await convertSessionTranscript(
+			empty.store,
+			"session-primary",
+		);
+		expect(noPairs.primary.lines).toEqual([]);
+		expect(noPairs.currentPair).toBe(0);
+		expect(noPairs.pairCount).toBe(0);
 	});
 
 	it("is strictly read-only: only store.inspect() is called, no list()", async () => {

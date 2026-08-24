@@ -36,9 +36,10 @@ import type { SessionTranscript } from "./session-transcript.ts";
 import {
 	convertSessionTranscript,
 	type TranscriptEvent,
+	type TranscriptPair,
 	type TranscriptStoreLike,
 	type TranscriptWindow,
-	transcriptWindowFromEvents,
+	transcriptPairFromEvents,
 } from "./session-transcript.ts";
 import type { WorkspaceNode } from "./session-tree.ts";
 import {
@@ -414,9 +415,9 @@ function decodeStorageRecordForScan(value: unknown): SeqEvent[] {
  */
 export function loadTranscriptFromContext(
 	ctx: Context,
-): (sessionId: string, limit?: number) => Promise<SessionTranscript> {
+): (sessionId: string, pair?: TranscriptPair) => Promise<SessionTranscript> {
 	const store: TranscriptStoreLike = service(ctx, "sessionPersistence");
-	return async (sessionId, limit) => {
+	return async (sessionId, pair) => {
 		try {
 			// Our own live run's lane-worker children supply the live lanes
 			// (spec #44, User Story 8): read each live worker's store window the
@@ -441,7 +442,7 @@ export function loadTranscriptFromContext(
 					store,
 					sessionId,
 					liveLanes,
-					limit,
+					pair,
 				);
 			} catch (error) {
 				// The strict store read refuses a seq gap at a spliced boundary
@@ -461,15 +462,16 @@ export function loadTranscriptFromContext(
 									decodeStorageRecordForScan,
 								);
 								if (events !== undefined) {
-									const read = transcriptWindowFromEvents(
+									const read = transcriptPairFromEvents(
 										sessionId,
 										events,
-										limit,
+										pair,
 									);
 									return {
 										primary: read.window,
 										lanes: liveLanes,
-										moreBefore: read.moreBefore,
+										currentPair: read.currentPair,
+										pairCount: read.pairCount,
 									};
 								}
 							}
@@ -486,7 +488,8 @@ export function loadTranscriptFromContext(
 				return {
 					primary: { sessionId, lines: [] },
 					lanes: liveLanes,
-					moreBefore: false,
+					currentPair: 0,
+					pairCount: 0,
 				};
 			}
 		} catch (error) {
@@ -496,7 +499,8 @@ export function loadTranscriptFromContext(
 			return {
 				primary: { sessionId, lines: [] },
 				lanes: [],
-				moreBefore: false,
+				currentPair: 0,
+				pairCount: 0,
 			};
 		}
 	};

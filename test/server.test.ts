@@ -92,7 +92,8 @@ const TRANSCRIPT: SessionTranscript = {
 			lines: [{ text: "right answer", role: "output" }],
 		},
 	],
-	moreBefore: false,
+	currentPair: 1,
+	pairCount: 1,
 };
 
 /** The frontend source root, whose production build the static-page suite serves. */
@@ -259,7 +260,8 @@ describe("session transcript endpoint", () => {
 				return {
 					primary: { sessionId, lines: [] },
 					lanes: [],
-					moreBefore: false,
+					currentPair: 0,
+					pairCount: 0,
 				};
 			},
 		});
@@ -268,41 +270,28 @@ describe("session transcript endpoint", () => {
 		expect(requested).toEqual(["session-42"]);
 	});
 
-	it("forwards an explicit ?limit= window size to the injected loader", async () => {
-		const limits: Array<number | undefined> = [];
+	it("forwards an explicit ?pair= selector to the injected loader", async () => {
+		const selected: Array<number | "last" | undefined> = [];
 		const handle = await start({
 			port: 0,
-			loadTranscript: (sessionId, limit) => {
-				limits.push(limit);
+			loadTranscript: (sessionId, pair) => {
+				selected.push(pair);
 				return {
 					primary: { sessionId, lines: [] },
 					lanes: [],
-					moreBefore: false,
+					currentPair: 0,
+					pairCount: 0,
 				};
 			},
 		});
-		await fetch(`${handle.url}/api/sessions/session-1/transcript?limit=200`);
+		await fetch(`${handle.url}/api/sessions/session-1/transcript?pair=3`);
 		await fetch(`${handle.url}/api/sessions/session-1/transcript`);
-		await fetch(`${handle.url}/api/sessions/session-1/transcript?limit=0`);
-		await fetch(`${handle.url}/api/sessions/session-1/transcript?limit=abc`);
-		expect(limits).toEqual([200, undefined, undefined, undefined]);
-	});
-
-	it("clamps an oversized ?limit= to the payload bound", async () => {
-		const limits: Array<number | undefined> = [];
-		const handle = await start({
-			port: 0,
-			loadTranscript: (sessionId, limit) => {
-				limits.push(limit);
-				return {
-					primary: { sessionId, lines: [] },
-					lanes: [],
-					moreBefore: false,
-				};
-			},
-		});
-		await fetch(`${handle.url}/api/sessions/session-1/transcript?limit=999999`);
-		expect(limits).toEqual([1000]);
+		await fetch(`${handle.url}/api/sessions/session-1/transcript?pair=last`);
+		await fetch(`${handle.url}/api/sessions/session-1/transcript?pair=0`);
+		await fetch(`${handle.url}/api/sessions/session-1/transcript?pair=abc`);
+		// 3 → the pair; absent, last, malformed, and non-positive all fall back
+		// to the loader default ("last").
+		expect(selected).toEqual([3, undefined, "last", undefined, undefined]);
 	});
 
 	it("404s a malformed transcript route", async () => {

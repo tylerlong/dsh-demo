@@ -33,7 +33,8 @@ const TRANSCRIPT: SessionTranscript = {
 			],
 		},
 	],
-	moreBefore: false,
+	currentPair: 1,
+	pairCount: 1,
 };
 
 function renderTranscript(
@@ -93,7 +94,8 @@ describe("Transcript", () => {
 				lines: [{ text: "only primary", role: "output" }],
 			},
 			lanes: [],
-			moreBefore: false,
+			currentPair: 1,
+			pairCount: 1,
 		});
 		expect(screen.queryAllByTestId("transcript-worker")).toHaveLength(0);
 		expect(screen.getByTestId("transcript-primary")).toHaveTextContent(
@@ -108,7 +110,8 @@ describe("Transcript", () => {
 				transcript={{
 					primary: { sessionId: "session-1", lines: [] },
 					lanes: [],
-					moreBefore: false,
+					currentPair: 0,
+					pairCount: 0,
 				}}
 				loading={false}
 				runStart={{ sessionId: "session-1", task: "what is your ai model?" }}
@@ -142,7 +145,8 @@ describe("Transcript", () => {
 							],
 						},
 					],
-					moreBefore: false,
+					currentPair: 0,
+					pairCount: 0,
 				}}
 				loading={false}
 				runStart={{ sessionId: "session-1", task: "question" }}
@@ -200,7 +204,8 @@ describe("Transcript", () => {
 				transcript={{
 					primary: { sessionId: "session-2", lines: [] },
 					lanes: [],
-					moreBefore: false,
+					currentPair: 0,
+					pairCount: 0,
 				}}
 				loading={false}
 				// The run belongs to session-1; session-2 is selected.
@@ -236,46 +241,98 @@ describe("Transcript", () => {
 		expect(screen.getByText(/Loading transcript/)).toBeInTheDocument();
 	});
 
-	it("shows the Load more button at the top only while moreBefore is true", () => {
-		const onLoadMore = vi.fn();
+	it("renders the first/prev/next/last buttons with ends disabled", () => {
+		// Middle pair: all four buttons enabled and clickable.
+		const onFirst = vi.fn();
+		const onPrev = vi.fn();
+		const onNext = vi.fn();
+		const onLast = vi.fn();
 		const { unmount } = render(
 			<Transcript
 				sessionId="session-1"
 				transcript={{
 					primary: {
 						sessionId: "session-1",
-						lines: [{ text: "newest", role: "output" }],
+						lines: [{ text: "middle", role: "output" }],
 					},
 					lanes: [],
-					moreBefore: true,
+					currentPair: 2,
+					pairCount: 3,
 				}}
 				loading={false}
-				onLoadMore={onLoadMore}
+				onFirst={onFirst}
+				onPrev={onPrev}
+				onNext={onNext}
+				onLast={onLast}
 			/>,
 		);
 
-		// The button renders above the primary window (the panel header is the
-		// only element above it).
-		const button = screen.getByTestId("transcript-load-more");
-		expect(button).toHaveTextContent("Load more");
-		const header = screen.getByRole("heading", { name: "Transcript" });
-		const primary = screen.getByTestId("transcript-primary");
-		expect(
-			button.compareDocumentPosition(primary) &
-				Node.DOCUMENT_POSITION_FOLLOWING,
-		).toBeTruthy();
-		expect(
-			header.compareDocumentPosition(button) &
-				Node.DOCUMENT_POSITION_FOLLOWING,
-		).toBeTruthy();
-
-		// Clicking grows the window via the callback.
-		button.click();
-		expect(onLoadMore).toHaveBeenCalledTimes(1);
+		// All four buttons present; the position reads "2 / 3".
+		expect(screen.getByTestId("transcript-position")).toHaveTextContent(
+			"2 / 3",
+		);
+		for (const name of ["first", "prev", "next", "last"] as const) {
+			const button = screen.getByTestId(`transcript-${name}`);
+			expect(button).not.toBeDisabled();
+			button.click();
+		}
+		expect(onFirst).toHaveBeenCalledTimes(1);
+		expect(onPrev).toHaveBeenCalledTimes(1);
+		expect(onNext).toHaveBeenCalledTimes(1);
+		expect(onLast).toHaveBeenCalledTimes(1);
 		unmount();
 
-		// No more history before the window: the button is gone.
+		// First pair: First/Prev disabled, Next/Last enabled.
+		const first = render(
+			<Transcript
+				sessionId="session-1"
+				transcript={{
+					primary: {
+						sessionId: "session-1",
+						lines: [{ text: "first", role: "output" }],
+					},
+					lanes: [],
+					currentPair: 1,
+					pairCount: 3,
+				}}
+				loading={false}
+				onNext={() => undefined}
+				onLast={() => undefined}
+			/>,
+		);
+		expect(screen.getByTestId("transcript-first")).toBeDisabled();
+		expect(screen.getByTestId("transcript-prev")).toBeDisabled();
+		expect(screen.getByTestId("transcript-next")).not.toBeDisabled();
+		expect(screen.getByTestId("transcript-last")).not.toBeDisabled();
+		first.unmount();
+
+		// Last pair: Next/Last disabled, First/Prev enabled.
 		render(
+			<Transcript
+				sessionId="session-1"
+				transcript={{
+					primary: {
+						sessionId: "session-1",
+						lines: [{ text: "last", role: "output" }],
+					},
+					lanes: [],
+					currentPair: 3,
+					pairCount: 3,
+				}}
+				loading={false}
+				onFirst={() => undefined}
+				onPrev={() => undefined}
+			/>,
+		);
+		expect(screen.getByTestId("transcript-first")).not.toBeDisabled();
+		expect(screen.getByTestId("transcript-prev")).not.toBeDisabled();
+		expect(screen.getByTestId("transcript-next")).toBeDisabled();
+		expect(screen.getByTestId("transcript-last")).toBeDisabled();
+	});
+
+	it("shows every navigation button disabled for a single-pair (or empty) session", () => {
+		// A single pair: all four buttons render but are disabled.
+		const single = render(
 			<Transcript
 				sessionId="session-1"
 				transcript={{
@@ -284,35 +341,43 @@ describe("Transcript", () => {
 						lines: [{ text: "only", role: "output" }],
 					},
 					lanes: [],
-					moreBefore: false,
+					currentPair: 1,
+					pairCount: 1,
 				}}
 				loading={false}
-				onLoadMore={onLoadMore}
+				onFirst={() => undefined}
+				onPrev={() => undefined}
+				onNext={() => undefined}
+				onLast={() => undefined}
 			/>,
 		);
-		expect(
-			screen.queryByTestId("transcript-load-more"),
-		).not.toBeInTheDocument();
-	});
+		for (const name of ["first", "prev", "next", "last"] as const) {
+			expect(screen.getByTestId(`transcript-${name}`)).toBeDisabled();
+		}
+		single.unmount();
 
-	it("hides the Load more button when the page cannot grow the window", () => {
+		// No pairs: the position reads "no pairs" and all buttons disabled.
 		render(
 			<Transcript
 				sessionId="session-1"
 				transcript={{
-					primary: {
-						sessionId: "session-1",
-						lines: [{ text: "more", role: "output" }],
-					},
+					primary: { sessionId: "session-1", lines: [] },
 					lanes: [],
-					moreBefore: true,
+					currentPair: 0,
+					pairCount: 0,
 				}}
 				loading={false}
-				// No onLoadMore: the button must not appear (nothing would happen).
+				onFirst={() => undefined}
+				onPrev={() => undefined}
+				onNext={() => undefined}
+				onLast={() => undefined}
 			/>,
 		);
-		expect(
-			screen.queryByTestId("transcript-load-more"),
-		).not.toBeInTheDocument();
+		expect(screen.getByTestId("transcript-position")).toHaveTextContent(
+			"no pairs",
+		);
+		for (const name of ["first", "prev", "next", "last"] as const) {
+			expect(screen.getByTestId(`transcript-${name}`)).toBeDisabled();
+		}
 	});
 });

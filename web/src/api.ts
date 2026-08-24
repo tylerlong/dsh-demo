@@ -7,10 +7,11 @@
  * session's transcript from the server's session endpoints: GET /api/sessions
  * returns the two-level tree (workspaces with their enriched sessions — each
  * carrying a readable label, its creation time, top-3, subagent-filtered),
- * and GET /api/sessions/:id/transcript returns the selected session's recent
- * prompt/answer window — primary-only, with per-line roles and (when a run
- * is live) the live lane windows (child #46); an optional ?limit=N grows the
- * primary window to the last N prompt/answer pairs for "load more". These thin fetch
+ * and GET /api/sessions/:id/transcript returns the selected session's shown
+ * prompt/answer pair — primary-only, with per-line roles and (when a run
+ * is live) the live lane windows (child #46); an optional ?pair=N (or
+ * ?pair=last) selects the shown pair, and the response reports
+ * currentPair/pairCount for first/prev/next/last navigation. These thin fetch
  * wrappers mirror
  * the shapes the server serves (see src/session-tree.ts and
  * src/session-transcript.ts), so the client and the server agree on the
@@ -81,17 +82,23 @@ export interface TranscriptLine {
 	readonly role: TranscriptRole;
 }
 
-/** One agent's recent transcript window (mirror of TranscriptWindow). */
+/** One agent's shown transcript window (mirror of TranscriptWindow). */
 export interface TranscriptWindow {
 	/** The session id this window was read from. */
 	readonly sessionId: string;
-	/** The recent prompt/answer window of the agent's transcript. */
+	/** The shown prompt/answer pair's lines. */
 	readonly lines: readonly TranscriptLine[];
 }
 
+/**
+ * Which prompt/answer pair a transcript read returns: a 1-indexed pair
+ * number, or "last" for the newest pair (the default view).
+ */
+export type TranscriptPair = number | "last";
+
 /** The read-only transcript read for one selected session. */
 export interface SessionTranscript {
-	/** The selected (primary) session's window. */
+	/** The selected (primary) session's shown pair. */
 	readonly primary: TranscriptWindow;
 	/**
 	 * The live lane-worker windows of our own in-progress run, supplied
@@ -100,19 +107,14 @@ export interface SessionTranscript {
 	 */
 	readonly lanes: readonly TranscriptWindow[];
 	/**
-	 * Whether the primary session has more prompt/answer pairs before the
-	 * returned window. The panel offers "load more" only while this is true;
-	 * lanes are never paginated.
+	 * The 1-indexed pair number `primary` shows (0 when the session has no
+	 * pairs). The page uses it with `pairCount` to enable/disable the
+	 * first/prev/next/last navigation.
 	 */
-	readonly moreBefore: boolean;
+	readonly currentPair: number;
+	/** The total number of prompt/answer pairs in the session. */
+	readonly pairCount: number;
 }
-
-/**
- * The number of prompt/answer pairs the default window shows, and by which
- * each "load more" click grows it. The default is one pair — the most recent
- * user prompt plus the model's reply — and each load adds the next older pair.
- */
-export const TRANSCRIPT_LOAD_STEP = 1;
 
 /** Fetch the configured model list and its agreed defaults from /api/models. */
 export async function fetchModels(): Promise<ModelsResponse> {
@@ -133,16 +135,16 @@ export async function fetchSessions(): Promise<SessionTree> {
 }
 
 /**
- * Fetch one session's recent transcript window from the store. `limit` sizes
- * the primary window (the last N prompt/answer pairs; undefined = the server's
- * default one-pair window), so "load more" can grow it backward one pair at a
- * time.
+ * Fetch one session's shown prompt/answer pair from the store. `pair` selects
+ * the pair (1-indexed, or "last" for the newest; undefined = "last"). The
+ * response reports `currentPair`/`pairCount` so the page can navigate
+ * first/prev/next/last.
  */
 export async function fetchTranscript(
 	sessionId: string,
-	limit?: number,
+	pair?: TranscriptPair,
 ): Promise<SessionTranscript> {
-	const query = limit === undefined ? "" : `?limit=${limit}`;
+	const query = pair === undefined ? "" : `?pair=${pair}`;
 	const res = await fetch(
 		`/api/sessions/${encodeURIComponent(sessionId)}/transcript${query}`,
 	);

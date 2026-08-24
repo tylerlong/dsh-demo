@@ -107,7 +107,8 @@ beforeAll(async () => {
 				lines: [{ text: "primary text", role: "input" }],
 			},
 			lanes: [],
-			moreBefore: false,
+			currentPair: 1,
+			pairCount: 1,
 		}),
 		startRun: factory.startRun,
 	});

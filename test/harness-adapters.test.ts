@@ -146,14 +146,21 @@ describe("loadTranscriptFromContext spliced-session recovery", () => {
 		]);
 		const ctx = { get: () => splicedStore({ rawContent: raw }) };
 		const load = loadTranscriptFromContext(ctx as never);
-		// Request both pairs: the parent prefix pair and the resumed child pair.
-		const transcript = await load("spliced", 2);
-		// Both the parent prefix and the resumed child stream render.
-		expect(transcript.primary.lines.map((l) => l.text)).toEqual([
-			"parent prompt",
+		// The tolerant fold groups the parent prefix and the resumed child into
+		// two pairs. Pair 2 (the newest) is the child prompt + answer; pair 1 is
+		// the parent prompt.
+		const last = await load("spliced", "last");
+		expect(last.primary.lines.map((l) => l.text)).toEqual([
 			"child prompt",
 			"child answer",
 		]);
+		expect(last.currentPair).toBe(2);
+		expect(last.pairCount).toBe(2);
+
+		const first = await load("spliced", 1);
+		expect(first.primary.lines.map((l) => l.text)).toEqual(["parent prompt"]);
+		expect(first.currentPair).toBe(1);
+		expect(first.pairCount).toBe(2);
 	});
 
 	it("rejects a genuine forward gap (no splice boundary licenses it)", async () => {
