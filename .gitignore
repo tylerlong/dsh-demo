@@ -5,6 +5,9 @@ node_modules
 test-results/
 playwright-report/
 
+# The e2e suite's isolated harness home (seeded by test/e2e/global-setup.ts).
+test/e2e/.home/
+
 # Vite build output (the server serves web/dist)
 web/dist/
 

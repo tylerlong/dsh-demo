@@ -1,3 +1,6 @@
+import { readdirSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import { expect, type Page, test } from "@playwright/test";
 
 /**
@@ -15,19 +18,49 @@ import { expect, type Page, test } from "@playwright/test";
  * ticket #41, renders the workspace → sessions tree, the transcript panel, and
  * the run form; the run lifecycle hook, ticket #33, renders the connection
  * status, the run status, and the two lanes with data-testid attributes; the
- * form controls are queried by their accessible roles). The tree is seeded
- * once on page load from the shared session store, so these tests need at
- * least one registered session in the local harness home (~/.dsh) — the same
- * catalog DSH web shows. The empty-catalog guard is covered by stubbing
- * /api/sessions with an empty tree (see "empty session catalog"), because the
- * live shared store is never empty in a working install. The workspace
- * dropdown no longer exists (parent #37): the run continues the session
- * selected in the tree, so the form has no workspace picker and submit stays
- * disabled until a session is selected.
+ * form controls are queried by their accessible roles).
  *
- * LOCAL-ONLY by design: they boot the real app (pnpm serve) against the real
- * harness and ~/.dsh credentials, and are not part of CI (CI runs vitest only).
+ * ISOLATED STORE: the suite runs against a throwaway harness home
+ * (test/e2e/.home, seeded by global-setup.ts), never the real ~/.dsh. The
+ * tree is seeded once on page load from that isolated store, which always
+ * holds exactly one fixture workspace with one fixture session
+ * (session-e2e-fixture). The empty-catalog guard is covered by stubbing
+ * /api/sessions with an empty tree (see "empty session catalog"). The
+ * workspace dropdown no longer exists (parent #37): the run continues the
+ * session selected in the tree, so the form has no workspace picker and submit
+ * stays disabled until a session is selected.
+ *
+ * LOCAL-ONLY by design: they boot the real app (pnpm serve) against the local
+ * harness checkout and real model credentials (settings + credentials copied
+ * into the isolated home), and are not part of CI (CI runs vitest only).
  */
+
+/** The isolated harness home the suite's server boots with (see playwright.config.ts). */
+const ISOLATED_HOME = fileURLToPath(new URL("./.home", import.meta.url));
+
+/**
+ * A stable fingerprint of one store file: its path relative to the isolated
+ * home plus size + mtimeMs. Cheap and sufficient to detect any write.
+ */
+function storeFingerprint(): string {
+	const entries: string[] = [];
+	const walk = (dir: string): void => {
+		for (const name of readdirSync(dir)) {
+			const path = join(dir, name);
+			const stat = statSync(path);
+			if (stat.isDirectory()) {
+				walk(path);
+			} else {
+				entries.push(
+					`${relative(ISOLATED_HOME, path)}:${stat.size}:${stat.mtimeMs}`,
+				);
+			}
+		}
+	};
+	walk(ISOLATED_HOME);
+	return entries.sort().join("\n");
+}
+
 const FAST_TASK = "Reply with the single word: ready";
 
 /** Session rows as served by /api/sessions (mirror of the SessionTree shape). */
@@ -44,21 +77,18 @@ interface WorkspaceRow {
 }
 
 /**
- * The repo directory harness-workflow itself runs in. Its workspace in the
- * shared store holds the live/current DSH session, which these run-form tests
- * must NEVER resume — continuing it appends the e2e task to the session the
- * maintainer is actively working in. See {@link safeTargetSession}.
+ * The repo directory harness-workflow itself runs in. Defense-in-depth: the
+ * run-form tests still refuse to resume a session whose workspace IS this repo
+ * path, even though the isolated store's only workspace is the fixture folder
+ * under test/e2e/fixtures — never this directory.
  */
 const REPO_PATH = process.cwd();
 
 /**
- * A deterministic session to resume for a submitted run, chosen so it never
- * touches the live session in this repo's own workspace. Prefers a non-repo
- * workspace whose path references the langchain-demo fixture; otherwise the
- * registry-first non-repo workspace's newest session (workspaces keep durable
- * registry order, never date-sorted). undefined only when every registered
- * workspace is this repo's — the run-form tests then fail fast rather than
- * resume the live session.
+ * A deterministic session to resume for a submitted run. In the isolated
+ * store this is always the fixture session: the fixture workspace's path is
+ * not the repo root, so it passes the guard below. undefined only when the
+ * tree is empty — the run-form tests then fail fast.
  */
 function safeTargetSession(
 	tree: readonly WorkspaceRow[],
@@ -79,7 +109,7 @@ function safeTargetSession(
 /**
  * The latest session across the whole tree (the page's read-only preselect
  * rule). Used only to ASSERT what the UI preselects — never as a submission
- * target, which would resume the live session.
+ * target.
  */
 function latestSession(tree: readonly WorkspaceRow[]): SessionRow | undefined {
 	let latest: SessionRow | undefined;
@@ -94,9 +124,8 @@ function latestSession(tree: readonly WorkspaceRow[]): SessionRow | undefined {
 }
 
 /**
- * Fetch the tree and click the safe (non-live) target row, asserting it
- * becomes selected. Shared by the run-form tests so none of them ever resumes
- * the live session without repeating this block.
+ * Fetch the tree and click the safe target row, asserting it becomes selected.
+ * Shared by the run-form tests so none of them repeats this block.
  */
 async function selectSafeSession(page: Page): Promise<SessionRow> {
 	const tree = (await (
@@ -104,9 +133,7 @@ async function selectSafeSession(page: Page): Promise<SessionRow> {
 	).json()) as readonly WorkspaceRow[];
 	const target = safeTargetSession(tree);
 	if (target === undefined) {
-		throw new Error(
-			"no non-live session to continue; refusing to resume the live session",
-		);
+		throw new Error("no session to continue in the isolated store");
 	}
 	await page.getByTestId(`session-row-${target.id}`).click();
 	await expect(page.getByTestId(`session-row-${target.id}`)).toHaveAttribute(
@@ -115,6 +142,41 @@ async function selectSafeSession(page: Page): Promise<SessionRow> {
 	);
 	return target;
 }
+
+test("read-only session reads never write to the isolated store", async ({
+	page,
+	request,
+}) => {
+	// The store reads (GET /api/sessions and GET /api/sessions/:id/transcript)
+	// must be strictly read-only: the app must never write to session files
+	// directly, and the suite must prove it against the store it actually
+	// serves. The isolated home is the only store the server can write, so a
+	// fingerprint before/after the reads catching any change is a real write.
+	await page.goto("/");
+	await expect(page.getByTestId("conn-status")).toHaveText("connected", {
+		timeout: 15_000,
+	});
+
+	// Prime the read paths once (lazy init), then settle so the baseline is
+	// taken after any one-time server-side initialization, not during it.
+	const tree = (await (
+		await request.get("/api/sessions")
+	).json()) as readonly WorkspaceRow[];
+	expect(tree.length).toBeGreaterThan(0);
+	const sessionId = tree[0]?.sessions[0]?.id;
+	expect(sessionId).toBeDefined();
+	await request.get(`/api/sessions/${sessionId}/transcript`);
+	await page.waitForTimeout(1_000);
+
+	const before = storeFingerprint();
+	// Drive the reads again — the exact paths the browser uses on load and on
+	// session selection.
+	await request.get("/api/sessions");
+	await request.get(`/api/sessions/${sessionId}/transcript`);
+	const after = storeFingerprint();
+
+	expect(after).toEqual(before);
+});
 
 test("page loads, WS connects, model dropdowns populate, session tree renders, no console errors", async ({
 	page,
