@@ -55,3 +55,39 @@ describe("loadTranscriptFromContext live lanes", () => {
     expect(transcript.lanes).toEqual([]);
   });
 });
+
+
+describe("watchSessionFromContext live-lane refresh", () => {
+  it("fires the update when a live lane child of the watched session streams an assistant chunk", async () => {
+    const watched = "primary";
+    const child = "worker-left";
+    const un = registerLiveLanes(watched, [{ laneId: "left", workerSessionId: child }]);
+    try {
+      let fired = 0;
+      // A fake context whose on() captures the listener, so the test can emit events.
+      let listener: ((session: { id: string }, event: { type: string }) => void) | undefined;
+      const ctx = {
+        on(_name: string, cb: (session: { id: string }, event: { type: string }) => void) {
+          listener = cb;
+          return () => { listener = undefined; };
+        },
+      };
+      const { watchSessionFromContext } = await import("../src/harness-adapters");
+      const watch = watchSessionFromContext(ctx as never);
+      const dispose = watch(watched, () => { fired += 1; });
+      // A chunk on the live lane child should fire the watch for the primary.
+      listener?.({ id: child }, { type: "assistant/chunk" });
+      expect(fired).toBe(1);
+      // A chunk on an unrelated session should not.
+      listener?.({ id: "unrelated" }, { type: "assistant/chunk" });
+      expect(fired).toBe(1);
+      // A chunk on the watched session itself still fires.
+      listener?.({ id: watched }, { type: "assistant/chunk" });
+      expect(fired).toBe(2);
+      dispose();
+    } finally {
+      un();
+    }
+  });
+});
+

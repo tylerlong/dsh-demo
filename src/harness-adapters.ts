@@ -216,13 +216,23 @@ export function loadTranscriptFromContext(
 export function watchSessionFromContext(
 	ctx: Context,
 ): (sessionId: string, onUpdate: () => void) => () => void {
-	return (sessionId, onUpdate) =>
-		ctx.on("session/event", (session, event) => {
-			if (session.id !== sessionId) {
+	return (sessionId, onUpdate) => {
+		// A watched session is live when it's the orchestrator of our own run:
+		// identity of the session itself, or of any of its live lane-worker
+		// children (which stream into their own child sessions during a run,
+		// parent unless the primary is watched). Firing onUpdate for a child's
+		// assistant chunk pushes the same session/updated for the watched
+		// primary, so the panel re-reads the primary plus its live lanes
+		// (spec #44, User Story 8) — no new push, no polling, read-only.
+		const laneSessionIds = () =>
+			new Set(liveLanesFor(sessionId).map((ref) => ref.workerSessionId));
+		return ctx.on("session/event", (session, event) => {
+			if (session.id !== sessionId && !laneSessionIds().has(session.id)) {
 				return;
 			}
 			if (event.type === "assistant/chunk") {
 				onUpdate();
 			}
 		});
+	};
 }
