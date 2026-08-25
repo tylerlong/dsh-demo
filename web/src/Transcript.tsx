@@ -77,26 +77,42 @@ export interface TranscriptProps {
 	readonly onLast?: () => void;
 }
 
-/** One line's background class for its role (input/output styled; default). */
+/** One line's text color for its role. Prompts and responses share the plain
+ * panel style (no background) and are told apart by a separator; only the
+ * default/tool lines are dimmed. */
 function roleClass(role: TranscriptRole): string {
 	switch (role) {
 		case "input":
-			return "bg-emerald-50 text-emerald-900";
+			return "text-slate-900";
 		case "output":
-			return "bg-sky-100 text-sky-900";
+			return "text-slate-900";
 		default:
 			return "text-slate-600";
 	}
 }
 
-/** One rendered line of a window, styled by its role. */
-function Line({ line }: { readonly line: TranscriptLine }) {
+/** One rendered group of contiguous same-role lines, kept as flowing text so
+ * its internal line breaks and blank lines render like ordinary text. */
+function Block({
+	role,
+	text,
+}: {
+	readonly role: TranscriptRole;
+	readonly text: string;
+}) {
 	return (
-		<div className={"px-1.5 py-0.5 " + roleClass(line.role)}>{line.text}</div>
+		<div className={"px-1.5 py-0.5 " + roleClass(role)}>{text}</div>
 	);
 }
 
-/** One agent's window (primary or live lane), each line styled by role. */
+/** Collapse runs of blank lines in text to a single blank line. A blank line
+ * is one empty row — two consecutive line breaks (`\n\n`); three or more
+ * breaks (`\n{3,}`) mean two or more blank lines and are reduced to one. */
+function collapseBlankRuns(text: string): string {
+	return text.replace(/\n{3,}/g, "\n\n");
+}
+
+/** One agent's window (primary or live lane), blank lines capped at one. */
 function Window({
 	sessionId,
 	lines,
@@ -108,6 +124,41 @@ function Window({
 	readonly label: string;
 	readonly testId: string;
 }) {
+	// Group consecutive same-role lines into blocks of flowing text, so blank
+	// lines inside a prompt/response body stay real blank rows (at most one at
+	// a time), rather than empty per-line boxes that collapse to nothing.
+	const blocks: Array<{ role: TranscriptRole; rows: string[] }> = [];
+	for (const line of lines) {
+		const last = blocks[blocks.length - 1];
+		if (last !== undefined && last.role === line.role) {
+			last.rows.push(line.text);
+		} else {
+			blocks.push({ role: line.role, rows: [line.text] });
+		}
+	}
+
+	// A separator (with one blank line above and below it) splits different
+	// roles — the prompt and the response — since neither carries a background.
+	const rendered: ReactNode[] = [];
+	blocks.forEach((block, index) => {
+		if (index > 0) {
+			rendered.push(
+				// biome-ignore lint/suspicious/noArrayIndexKey: built once per render from immutable blocks, keys are stable.
+				<div key={`sep-up-${index}`} className="h-4" aria-hidden="true" />,
+				// biome-ignore lint/suspicious/noArrayIndexKey: built once per render from immutable blocks, keys are stable.
+				<div
+					key={`sep-${index}`}
+					data-testid="transcript-separator"
+					className="border-t border-slate-300"
+				/>,
+				// biome-ignore lint/suspicious/noArrayIndexKey: built once per render from immutable blocks, keys are stable.
+				<div key={`sep-down-${index}`} className="h-4" aria-hidden="true" />,
+			);
+		}
+		const text = collapseBlankRuns(block.rows.join("\n"));
+		// biome-ignore lint/suspicious/noArrayIndexKey: blocks are an immutable render-only grouping, keys are stable.
+		rendered.push(<Block key={`block-${index}`} role={block.role} text={text} />);
+	});
 	return (
 		<div className="flex flex-col gap-1">
 			<h3 className="text-xs font-semibold text-slate-600">
@@ -117,10 +168,7 @@ function Window({
 				data-testid={testId}
 				className="flex min-h-[48px] flex-col whitespace-pre-wrap break-words rounded-md border border-slate-200 bg-slate-50 p-1.5 font-mono text-xs"
 			>
-				{lines.map((line, index) => (
-					// biome-ignore lint/suspicious/noArrayIndexKey: lines are an immutable render-only window (no reorder/filter), so the index is a stable key.
-					<Line key={index} line={line} />
-				))}
+				{rendered}
 			</pre>
 		</div>
 	);

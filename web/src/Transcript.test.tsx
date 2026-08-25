@@ -50,7 +50,7 @@ function renderTranscript(
 }
 
 describe("Transcript", () => {
-	it("styles input and output lines with distinct backgrounds; default stays plain", () => {
+	it("styles prompt and response with plain text and separates them, default stays dim", () => {
 		renderTranscript();
 
 		const primary = screen.getByTestId("transcript-primary");
@@ -68,15 +68,109 @@ describe("Transcript", () => {
 		expect(input).toBeDefined();
 		expect(output).toBeDefined();
 		expect(tool).toBeDefined();
-		// Input and output carry distinct background classes: user input is
-		// green, model output is blue.
-		expect(input?.className).toContain("bg-emerald-50");
+		// Neither prompt nor response carries a background tint anymore.
+		expect(input?.className).not.toContain("bg-emerald-50");
 		expect(input?.className).not.toContain("bg-sky-100");
-		expect(output?.className).toContain("bg-sky-100");
 		expect(output?.className).not.toContain("bg-emerald-50");
-		// The default line has no input/output background.
-		expect(tool?.className).not.toContain("bg-sky-100");
+		expect(output?.className).not.toContain("bg-sky-100");
+		// The default/tool line is dimmed but also plain.
 		expect(tool?.className).not.toContain("bg-emerald-50");
+		expect(tool?.className).not.toContain("bg-sky-100");
+		// A separator splits the prompt block from the response block.
+		expect(primary.querySelector('[data-testid="transcript-separator"]')).toBeTruthy();
+	});
+
+	it("places the separator exactly between the last prompt line and the first response line, with blank lines around it", () => {
+		renderTranscript({
+			primary: {
+				sessionId: "session-1",
+				lines: [
+					{ text: "prompt line a", role: "input" },
+					{ text: "prompt line b", role: "input" },
+					{ text: "response line", role: "output" },
+				],
+			},
+			lanes: [],
+			currentPair: 1,
+			pairCount: 1,
+		});
+
+		const primary = screen.getByTestId("transcript-primary");
+		const separators = primary.querySelectorAll(
+			'[data-testid="transcript-separator"]',
+		);
+		expect(separators).toHaveLength(1);
+		const separator = separators[0]!;
+		// A blank spacer element sits before and after the separator, which in
+		// turn sits between the last prompt line and the first response line.
+		expect(separator.previousElementSibling?.getAttribute("aria-hidden")).toBe(
+			"true",
+		);
+		expect(
+			separator.previousElementSibling?.previousElementSibling?.textContent,
+		).toContain("prompt line b");
+		expect(separator.nextElementSibling?.getAttribute("aria-hidden")).toBe(
+			"true",
+		);
+		expect(
+			separator.nextElementSibling?.nextElementSibling?.textContent,
+		).toContain("response line");
+	});
+
+	it("collapses consecutive blank lines in a prompt/response body to at most one", () => {
+		renderTranscript({
+			primary: {
+				sessionId: "session-1",
+				lines: [
+					{ text: "heading", role: "input" },
+					{ text: "", role: "input" },
+					{ text: "", role: "input" },
+					{ text: "", role: "input" },
+					{ text: "after single blank", role: "input" },
+				],
+			},
+			lanes: [],
+			currentPair: 1,
+			pairCount: 1,
+		});
+
+		const primary = screen.getByTestId("transcript-primary");
+		// All same-role lines collapse into one pre-wrap text block whose three
+		// stored blank lines are reduced to a single one (`\n\n`).
+		const inputBlock = Array.from(primary.querySelectorAll("div")).find(
+			(node) => node.textContent?.includes("heading"),
+		);
+		expect(inputBlock?.textContent).toBe("heading\n\nafter single blank");
+		// No separator inside a single-role block.
+		expect(
+			primary.querySelector('[data-testid="transcript-separator"]'),
+		).toBeNull();
+	});
+
+	it("retains a single real blank line between paragraphs (it is a visible blank row)", () => {
+		renderTranscript({
+			primary: {
+				sessionId: "session-1",
+				lines: [
+					{ text: "paragraph one", role: "input" },
+					{ text: "", role: "input" },
+					{ text: "paragraph two", role: "input" },
+				],
+			},
+			lanes: [],
+			currentPair: 1,
+			pairCount: 1,
+		});
+
+		const primary = screen.getByTestId("transcript-primary");
+		// One blank line (`\n\n`) is exactly one blank line, so it stays — the
+		// two paragraphs are separated by a visible blank row.
+		const inputBlock = Array.from(primary.querySelectorAll("div")).find(
+			(node) => node.textContent?.includes("paragraph one"),
+		);
+		expect(inputBlock?.textContent).toBe(
+			"paragraph one\n\nparagraph two",
+		);
 	});
 
 	it("renders the live lane windows alongside the primary", () => {
